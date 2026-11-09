@@ -9,7 +9,8 @@
     "typecheck": "tsc -p tsconfig.main.json --noEmit && tsc -p tsconfig.renderer.json --noEmit",
     "start": "npm run build && electron .",
     "test": "npm run build && node --test \"dist/**/*.test.js\"",
-    "dist": "npm run build && electron-builder --linux AppImage rpm"
+    "dist": "npm run build && electron-builder --linux AppImage rpm --publish never",
+    "dist:appimage": "npm run build && electron-builder --linux AppImage --publish never"
   },
   "author": "Vaslabs <engineering@vaslabs.io>",
   "dependencies": {
@@ -43,7 +44,8 @@
         "rpm"
       ],
       "maintainer": "engineering@vaslabs.io"
-    }
+    },
+    "artifactName": "stripe-analytics-${version}-${arch}.${ext}"
   },
   "license": "UNLICENSED"
 }

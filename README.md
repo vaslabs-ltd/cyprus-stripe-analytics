@@ -71,11 +71,37 @@ npm test         # unit tests for the aggregation
 npm run typecheck
 ```
 
-## Packaging for Fedora
+## Download (GitLab CI)
+
+Every pipeline builds the AppImage. Open the pipeline's `appimage` job and click **Download**
+(artifacts are kept for 30 days); on merge requests it also shows up as "AppImage".
+
+For a permanent download, tag a release:
+
+```sh
+git tag v0.2.0 && git push origin v0.2.0
+```
+
+The tag's version is used for the build, the AppImage is uploaded to the project's package
+registry, and a GitLab Release (Deploy → Releases) links to it, with a SHA-256 checksum.
+
+To run it:
+
+```sh
+chmod +x stripe-analytics-0.2.0-x86_64.AppImage
+mkdir -p ~/.config/"Stripe Analytics"
+echo 'STRIPE_PASSKEY=rk_live_...' > ~/.config/"Stripe Analytics"/.env
+./stripe-analytics-0.2.0-x86_64.AppImage
+```
+
+AppImages need FUSE (`sudo dnf install fuse-libs` if it's missing). CI never needs the Stripe key.
+
+## Packaging locally
 
 ```sh
 sudo dnf install rpm-build   # needed for the rpm target
 npm run dist                 # writes an AppImage and an .rpm to release/
+npm run dist:appimage        # AppImage only (what CI builds)
 ```
 
 ## Layout

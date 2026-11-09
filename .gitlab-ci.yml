@@ -1,0 +1,105 @@
+# Builds the Linux AppImage.
+#  - Every pipeline: typecheck + tests, then build the AppImage as a downloadable job artifact.
+#  - Tags like v1.2.3: also upload the AppImage to the project's Generic Package Registry
+#    (permanent) and create a GitLab Release linking to it.
+#
+# No Stripe key is needed or used in CI: building the app doesn't talk to Stripe.
+
+workflow:
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH && $CI_OPEN_MERGE_REQUESTS
+      when: never # avoid duplicate branch + MR pipelines
+    - if: $CI_COMMIT_BRANCH
+    - if: $CI_COMMIT_TAG
+
+stages:
+  - test
+  - build
+  - release
+
+variables:
+  NODE_IMAGE: node:22-bookworm
+  npm_config_cache: $CI_PROJECT_DIR/.cache/npm
+  ELECTRON_CACHE: $CI_PROJECT_DIR/.cache/electron
+  ELECTRON_BUILDER_CACHE: $CI_PROJECT_DIR/.cache/electron-builder
+  PACKAGE_REGISTRY_URL: $CI_API_V4_URL/projects/$CI_PROJECT_ID/packages/generic/stripe-analytics
+
+.node:
+  image: $NODE_IMAGE
+  cache:
+    key:
+      files: [package-lock.json]
+    paths: [.cache/]
+  before_script:
+    - npm ci --prefer-offline --no-audit --no-fund
+
+test:
+  extends: .node
+  stage: test
+  script:
+    - npm run typecheck
+    - npm test
+
+appimage:
+  extends: .node
+  stage: build
+  needs: [test]
+  script:
+    # Tagged builds take their version from the tag (v1.2.3 -> 1.2.3).
+    - |
+      if [ -n "$CI_COMMIT_TAG" ]; then
+        npm version --no-git-tag-version --allow-same-version "${CI_COMMIT_TAG#v}"
+      fi
+    - VERSION=$(node -p "require('./package.json').version")
+    - npm run dist:appimage
+    - APPIMAGE="release/stripe-analytics-${VERSION}-x86_64.AppImage"
+    - ls -lh "$APPIMAGE"
+    - sha256sum "$APPIMAGE" | tee "$APPIMAGE.sha256"
+    - echo "VERSION=$VERSION" >> build.env
+    - echo "APPIMAGE_NAME=$(basename "$APPIMAGE")" >> build.env
+    # Tags: keep a permanent copy in the package registry (job artifacts expire).
+    - |
+      if [ -n "$CI_COMMIT_TAG" ]; then
+        for f in "$APPIMAGE" "$APPIMAGE.sha256"; do
+          curl --fail-with-body --header "JOB-TOKEN: $CI_JOB_TOKEN" \
+            --upload-file "$f" "$PACKAGE_REGISTRY_URL/$VERSION/$(basename "$f")"
+        done
+      fi
+  artifacts:
+    name: stripe-analytics-$CI_COMMIT_REF_SLUG
+    expose_as: AppImage
+    paths:
+      - release/stripe-analytics-*.AppImage
+      - release/stripe-analytics-*.AppImage.sha256
+    reports:
+      dotenv: build.env
+    expire_in: 30 days
+
+release:
+  stage: release
+  image: registry.gitlab.com/gitlab-org/cli:latest
+  needs:
+    - job: appimage
+      artifacts: true
+  rules:
+    - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+/
+  script:
+    - echo "Releasing $CI_COMMIT_TAG ($APPIMAGE_NAME)"
+  release:
+    tag_name: $CI_COMMIT_TAG
+    name: Stripe Analytics $CI_COMMIT_TAG
+    description: |
+      Linux AppImage for Stripe Analytics $VERSION.
+
+      Download, then: `chmod +x $APPIMAGE_NAME && ./$APPIMAGE_NAME`
+      Put your restricted Stripe key in `~/.config/Stripe Analytics/.env` as `STRIPE_PASSKEY=rk_...`.
+    assets:
+      links:
+        - name: $APPIMAGE_NAME
+          url: $PACKAGE_REGISTRY_URL/$VERSION/$APPIMAGE_NAME
+          link_type: package
+          direct_asset_path: /stripe-analytics.AppImage
+        - name: $APPIMAGE_NAME.sha256
+          url: $PACKAGE_REGISTRY_URL/$VERSION/$APPIMAGE_NAME.sha256
+          link_type: other
