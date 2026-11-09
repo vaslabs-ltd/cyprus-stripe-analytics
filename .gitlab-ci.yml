@@ -53,9 +53,12 @@ appimage:
       fi
     - VERSION=$(node -p "require('./package.json').version")
     - npm run dist:appimage
-    - APPIMAGE="release/stripe-analytics-${VERSION}-x86_64.AppImage"
+    # Copy into a fixed folder: expose_as doesn't allow wildcards in artifact paths.
+    - mkdir -p appimage
+    - cp "release/stripe-analytics-${VERSION}-x86_64.AppImage" appimage/
+    - APPIMAGE="appimage/stripe-analytics-${VERSION}-x86_64.AppImage"
     - ls -lh "$APPIMAGE"
-    - sha256sum "$APPIMAGE" | tee "$APPIMAGE.sha256"
+    - (cd appimage && sha256sum "$(basename "$APPIMAGE")" | tee "$(basename "$APPIMAGE").sha256")
     - echo "VERSION=$VERSION" >> build.env
     - echo "APPIMAGE_NAME=$(basename "$APPIMAGE")" >> build.env
     # Tags: keep a permanent copy in the package registry (job artifacts expire).
@@ -70,8 +73,7 @@ appimage:
     name: stripe-analytics-$CI_COMMIT_REF_SLUG
     expose_as: AppImage
     paths:
-      - release/stripe-analytics-*.AppImage
-      - release/stripe-analytics-*.AppImage.sha256
+      - appimage/
     reports:
       dotenv: build.env
     expire_in: 30 days
