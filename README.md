@@ -45,8 +45,14 @@ One row per calendar day and currency; `rate` is units of `currency` per 1 EUR, 
 the publication day the rate came from. Only dates missing from the file are requested from
 `api.frankfurter.dev` (one request covering the gap), then added to the file. Only currency
 codes and dates are sent to it, never Stripe data. Commit the file after runs that add rates.
-In the packaged app, the file is copied to `~/.config/Stripe Analytics/fx-rates.csv` on first use
-(set `FX_RATES_FILE` to use a different path).
+In the packaged app, the file is a cache copied on first use to:
+
+- Linux: `~/.cache/vaslabs-ltd/stripe-analytics/fx-rates.csv` (`$XDG_CACHE_HOME` is respected)
+- Windows: `%LOCALAPPDATA%\vaslabs-ltd\stripe-analytics\Cache\fx-rates.csv`
+
+It's seeded from the old location (`~/.config/Stripe Analytics/fx-rates.csv`) if that exists, else
+from the bundled file. Deleting it is safe: missing rates are fetched again. Set `FX_RATES_FILE`
+to use a different path.
 
 ### Cyprus VAT
 Finalized invoices (`paid`, `open`, `uncollectible`; never `draft` or `void`) whose **invoice date**

@@ -1,6 +1,6 @@
 import { app, BrowserWindow, dialog, ipcMain } from 'electron';
 import { chmod, mkdir, readFile, writeFile } from 'node:fs/promises';
-import { copyFileSync, existsSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync } from 'node:fs';
 import path from 'node:path';
 import dotenv from 'dotenv';
 import type Stripe from 'stripe';
@@ -9,13 +9,14 @@ import { checkKeyAccess, createStripeClient, isRestrictedKey, revenueByCountry, 
 import { vatReportToCsv } from './vat';
 import { reportToCsv } from './analytics';
 import { FxRateStore } from './fx';
+import { APP_DIR, cacheDir } from './paths';
 
 /**
  * The app's config dir: ~/.config/vaslabs-ltd/stripe-analytics on Linux,
  * %APPDATA%\vaslabs-ltd\stripe-analytics on Windows.
  */
 function configDir(): string {
-  return path.join(app.getPath('appData'), 'vaslabs-ltd', 'stripe-analytics');
+  return path.join(app.getPath('appData'), APP_DIR);
 }
 const configEnvFile = () => path.join(configDir(), '.env');
 
@@ -51,16 +52,24 @@ function getStripe(): Stripe {
 
 let fxStore: FxRateStore | null = null;
 /**
- * Dev: the committed data/fx-rates.csv in the project. Packaged app: a copy in the user
- * config dir (the app bundle is read-only), seeded from the bundled file on first use.
+ * Dev: the committed data/fx-rates.csv in the project. Packaged app: a copy in the user's cache
+ * dir (see cacheDir; the app bundle is read-only). The copy is seeded on first use from the
+ * cache the app used before (in Electron's userData dir) if there is one, else the bundled file.
  */
 function getFxStore(): FxRateStore {
   if (fxStore) return fxStore;
-  const bundled = path.join(app.getAppPath(), 'data', 'fx-rates.csv');
-  let file = process.env.FX_RATES_FILE || bundled;
+  let file = process.env.FX_RATES_FILE || path.join(app.getAppPath(), 'data', 'fx-rates.csv');
   if (!process.env.FX_RATES_FILE && app.isPackaged) {
-    file = path.join(app.getPath('userData'), 'fx-rates.csv');
-    if (!existsSync(file) && existsSync(bundled)) copyFileSync(bundled, file);
+    file = path.join(cacheDir(process.platform, process.env, app.getPath('home')), 'fx-rates.csv');
+    if (!existsSync(file)) {
+      const seed = [path.join(app.getPath('userData'), 'fx-rates.csv'), path.join(app.getAppPath(), 'data', 'fx-rates.csv')].find((f) =>
+        existsSync(f),
+      );
+      if (seed) {
+        mkdirSync(path.dirname(file), { recursive: true });
+        copyFileSync(seed, file);
+      }
+    }
   }
   fxStore = new FxRateStore(file);
   return fxStore;
