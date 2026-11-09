@@ -30,7 +30,8 @@
       "dist/**/*",
       "!dist/**/*.test.js",
       "!dist/**/*.map",
-      "package.json"
+      "package.json",
+      "data/**/*"
     ],
     "directories": {
       "output": "release"

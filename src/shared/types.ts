@@ -16,13 +16,32 @@ export interface CountryCurrencyRevenue {
   amountMinor: number;
   /** Number of decimal places for this currency in Stripe (0, 2 or 3). */
   exponent: number;
+  /** Revenue converted to the report's base currency, in major units (e.g. euros). */
+  baseAmount: number;
   invoiceCount: number;
   customerCount: number;
 }
 
+export interface CurrencyTotal {
+  currency: string;
+  amountMinor: number;
+  exponent: number;
+  /** Total converted to the base currency, major units. */
+  baseAmount: number;
+  /** Fraction (0..1) of all revenue, measured in the base currency. */
+  share: number;
+  invoiceCount: number;
+}
+
 export interface RevenueReport {
   rows: CountryCurrencyRevenue[];
-  totalsByCurrency: { currency: string; amountMinor: number; exponent: number; invoiceCount: number }[];
+  totalsByCurrency: CurrencyTotal[];
+  /** Lower-case currency code all amounts are converted to for comparison. */
+  baseCurrency: string;
+  /** Sum of all revenue in the base currency, major units. */
+  baseTotal: number;
+  /** Where the exchange rates come from. */
+  fxSource: string;
   invoicesScanned: number;
   /** How the country was resolved, for transparency. */
   countrySources: { customerAddress: number; invoiceSnapshot: number; shipping: number; unknown: number };

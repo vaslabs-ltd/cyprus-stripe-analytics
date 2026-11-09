@@ -19,9 +19,10 @@ const statusEl = $<HTMLSpanElement>('#status');
 const totalsEl = $<HTMLElement>('#totals');
 const table = $<HTMLTableElement>('#table');
 const tbody = table.querySelector('tbody')!;
+const baseTh = table.querySelector<HTMLTableCellElement>('th[data-sort="base"]')!;
 const metaEl = $<HTMLElement>('#meta');
 
-type SortKey = 'country' | 'currency' | 'amount' | 'share' | 'invoices' | 'customers';
+type SortKey = 'country' | 'currency' | 'amount' | 'base' | 'share' | 'invoices' | 'customers';
 let report: RevenueReport | null = null;
 let sortKey: SortKey = 'amount';
 let sortAsc = false;
@@ -62,8 +63,14 @@ function el<K extends keyof HTMLElementTagNameMap>(tag: K, cls?: string, text?: 
   return e;
 }
 
+function formatBase(r: RevenueReport, amount: number): string {
+  return formatMoney(Math.round(amount * 100), r.baseCurrency, 2);
+}
+
+const pctFmt = new Intl.NumberFormat(undefined, { style: 'percent', minimumFractionDigits: 1, maximumFractionDigits: 1 });
+
 function renderTotals(r: RevenueReport, currency: string): void {
-  totalsEl.replaceChildren();
+  const cards = el('div', 'cards');
   for (const t of r.totalsByCurrency) {
     if (currency && t.currency !== currency) continue;
     const countries = r.rows.filter((row) => row.currency === t.currency).length;
@@ -71,10 +78,31 @@ function renderTotals(r: RevenueReport, currency: string): void {
     card.append(
       el('div', 'k', `Total ${t.currency.toUpperCase()}`),
       el('div', 'v', formatMoney(t.amountMinor, t.currency, t.exponent)),
-      el('div', 'n', `${t.invoiceCount} invoices · ${countries} countries`),
+      el('div', 'share-line', `${pctFmt.format(t.share)} of revenue`),
+      el('div', 'n', `≈ ${formatBase(r, t.baseAmount)} · ${t.invoiceCount} invoices · ${countries} countries`),
     );
-    totalsEl.append(card);
+    cards.append(card);
   }
+
+  // Currency mix: share of all revenue, measured in the base currency.
+  const mix = el('div', 'mix');
+  const bar = el('div', 'mix-bar');
+  const legend = el('div', 'mix-legend');
+  r.totalsByCurrency.forEach((t, i) => {
+    const seg = el('div', `seg c${i % 4}`);
+    seg.style.width = `${t.share * 100}%`;
+    seg.title = `${t.currency.toUpperCase()} ${pctFmt.format(t.share)}`;
+    bar.append(seg);
+    const item = el('span', 'item');
+    item.append(el('span', `swatch c${i % 4}`), document.createTextNode(`${t.currency.toUpperCase()} ${pctFmt.format(t.share)}`));
+    legend.append(item);
+  });
+  mix.append(
+    el('div', 'k', `Currency mix · total ≈ ${formatBase(r, r.baseTotal)}`),
+    bar,
+    legend,
+  );
+  totalsEl.replaceChildren(mix, cards);
 }
 
 function renderTable(): void {
@@ -89,6 +117,7 @@ function renderTable(): void {
     currency: (a, b) => a.currency.localeCompare(b.currency),
     // Amounts in different currencies aren't comparable, so group by currency first.
     amount: (a, b) => a.currency.localeCompare(b.currency) * (sortAsc ? 1 : -1) || a.amountMinor - b.amountMinor,
+    base: (a, b) => a.baseAmount - b.baseAmount,
     share: (a, b) => share(a) - share(b),
     invoices: (a, b) => a.invoiceCount - b.invoiceCount,
     customers: (a, b) => a.customerCount - b.customerCount,
@@ -109,6 +138,7 @@ function renderTable(): void {
         countryTd,
         el('td', undefined, r.currency.toUpperCase()),
         el('td', 'num', formatMoney(r.amountMinor, r.currency, r.exponent)),
+        el('td', 'num muted', formatBase(report!, r.baseAmount)),
         shareTd,
         el('td', 'num', String(r.invoiceCount)),
         el('td', 'num', String(r.customerCount)),
@@ -121,6 +151,7 @@ function renderTable(): void {
     th.classList.toggle('sorted', th.dataset.sort === sortKey);
     th.classList.toggle('asc', th.dataset.sort === sortKey && sortAsc);
   }
+  baseTh.textContent = `≈ ${report.baseCurrency.toUpperCase()}`;
   table.hidden = false;
   renderTotals(report, currency);
 }
@@ -130,7 +161,8 @@ function renderMeta(r: RevenueReport): void {
   metaEl.textContent =
     `${r.invoicesScanned} paid invoices scanned at ${new Date(r.generatedAt).toLocaleString()}. ` +
     `Country from customer address: ${s.customerAddress}, invoice snapshot: ${s.invoiceSnapshot}, ` +
-    `shipping: ${s.shipping}, unknown: ${s.unknown}.`;
+    `shipping: ${s.shipping}, unknown: ${s.unknown}. ` +
+    `Conversion to ${r.baseCurrency.toUpperCase()}: ${r.fxSource}.`;
 }
 
 function populateCurrencies(r: RevenueReport): void {
@@ -144,6 +176,12 @@ function populateCurrencies(r: RevenueReport): void {
   }
   currencySelect.value = r.totalsByCurrency.some((t) => t.currency === prev) ? prev : '';
 }
+
+// Reports cover complete past days only (UTC), ending yesterday at the latest.
+const yesterdayUtc = new Date(Date.now() - 86_400_000).toISOString().slice(0, 10);
+fromInput.max = yesterdayUtc;
+toInput.max = yesterdayUtc;
+toInput.placeholder = yesterdayUtc;
 
 api.onProgress((p) => setStatus(`Fetching… ${p.invoicesScanned} invoices`));
 

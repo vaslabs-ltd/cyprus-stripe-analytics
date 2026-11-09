@@ -1,6 +1,7 @@
 import Stripe from 'stripe';
 import type { Progress, RevenueQuery, RevenueReport } from '../shared/types';
-import { RevenueAggregator, type InvoiceFact } from './analytics';
+import { RevenueAggregator, toMajorUnits, type InvoiceFact } from './analytics';
+import { assertSupportedCurrency, BASE_CURRENCY, FX_SOURCE, isoDate, type FxRateStore } from './fx';
 
 /**
  * Only restricted keys (rk_...) are accepted. A standard secret key (sk_...) has full
@@ -28,6 +29,7 @@ function toFact(inv: Stripe.Invoice): InvoiceFact {
     customerId,
     currency: inv.currency,
     amountPaid: inv.amount_paid,
+    paidDate: isoDate((inv.status_transitions?.paid_at ?? inv.created) * 1000),
     customerCountry: customer?.address?.country,
     invoiceCountry: inv.customer_address?.country,
     shippingCountry: customer?.shipping?.address?.country,
@@ -36,29 +38,47 @@ function toFact(inv: Stripe.Invoice): InvoiceFact {
 
 /**
  * Revenue = sum of `amount_paid` over invoices with status "paid", grouped by the
- * customer's country and the invoice currency. Read-only: uses list endpoints only.
+ * customer's country and the invoice currency. Each invoice is also converted to EUR at
+ * the ECB rate on its payment date, for cross-currency shares. Read-only: list endpoints only.
  */
 export async function revenueByCountry(
   stripe: Stripe,
+  fx: FxRateStore,
   query: RevenueQuery,
   onProgress: (p: Progress) => void,
 ): Promise<RevenueReport> {
-  const created: Stripe.RangeQueryParam = {};
+  // Reports cover complete past days only: always end at yesterday 23:59:59 UTC at the latest.
+  const yesterday = isoDate(Date.now() - 86_400_000);
+  const to = query.to && query.to < yesterday ? query.to : yesterday;
+  const created: Stripe.RangeQueryParam = { lte: dateToUnix(to, true) };
   if (query.from) created.gte = dateToUnix(query.from, false);
-  if (query.to) created.lte = dateToUnix(query.to, true);
 
-  const agg = new RevenueAggregator();
+  const facts: InvoiceFact[] = [];
   const list = stripe.invoices.list({
     status: 'paid',
     limit: 100,
     expand: ['data.customer'],
-    ...(Object.keys(created).length ? { created } : {}),
+    created,
   });
 
   for await (const inv of list) {
-    agg.add(toFact(inv));
-    if (agg.invoicesScanned % 100 === 0) onProgress({ invoicesScanned: agg.invoicesScanned });
+    const fact = toFact(inv);
+    assertSupportedCurrency(fact.currency);
+    facts.push(fact);
+    if (facts.length % 100 === 0) onProgress({ invoicesScanned: facts.length });
   }
-  onProgress({ invoicesScanned: agg.invoicesScanned });
+  onProgress({ invoicesScanned: facts.length });
+
+  await fx.ensure(
+    facts.map((f) => f.currency),
+    facts.map((f) => f.paidDate),
+  );
+
+  const agg = new RevenueAggregator(BASE_CURRENCY, FX_SOURCE);
+  for (const f of facts) {
+    // An invoice created before the cut-off but paid today can't be converted yet: leave it out.
+    if (f.paidDate > yesterday) continue;
+    agg.add(f, toMajorUnits(f.amountPaid, f.currency) / fx.rate(f.currency, f.paidDate));
+  }
   return agg.report(query);
 }

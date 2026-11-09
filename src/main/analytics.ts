@@ -5,6 +5,8 @@ export interface InvoiceFact {
   customerId: string | null;
   currency: string;
   amountPaid: number;
+  /** UTC date (YYYY-MM-DD) the invoice was paid, used for currency conversion. */
+  paidDate: string;
   /** Country from the customer object's billing address (current). */
   customerCountry?: string | null;
   /** Country snapshotted on the invoice at finalization time. */
@@ -34,7 +36,13 @@ export class RevenueAggregator {
   };
   private scanned = 0;
 
-  add(f: InvoiceFact): void {
+  constructor(
+    private readonly baseCurrency: string,
+    private readonly fxSource: string,
+  ) {}
+
+  /** @param baseAmount the invoice's amount_paid converted to the base currency, in major units. */
+  add(f: InvoiceFact, baseAmount: number): void {
     this.scanned++;
     const { country, source } = resolveCountry(f);
     this.sources[source]++;
@@ -43,12 +51,13 @@ export class RevenueAggregator {
     let b = this.buckets.get(key);
     if (!b) {
       b = {
-        row: { country, currency, amountMinor: 0, exponent: minorUnitExponent(currency), invoiceCount: 0, customerCount: 0 },
+        row: { country, currency, amountMinor: 0, exponent: minorUnitExponent(currency), baseAmount: 0, invoiceCount: 0, customerCount: 0 },
         customers: new Set(),
       };
       this.buckets.set(key, b);
     }
     b.row.amountMinor += f.amountPaid;
+    b.row.baseAmount += baseAmount;
     b.row.invoiceCount++;
     if (f.customerId) b.customers.add(f.customerId);
   }
@@ -64,15 +73,23 @@ export class RevenueAggregator {
 
     const totals = new Map<string, RevenueReport['totalsByCurrency'][number]>();
     for (const r of rows) {
-      const t = totals.get(r.currency) ?? { currency: r.currency, amountMinor: 0, exponent: r.exponent, invoiceCount: 0 };
+      const t = totals.get(r.currency) ?? { currency: r.currency, amountMinor: 0, exponent: r.exponent, baseAmount: 0, share: 0, invoiceCount: 0 };
       t.amountMinor += r.amountMinor;
+      t.baseAmount += r.baseAmount;
       t.invoiceCount += r.invoiceCount;
       totals.set(r.currency, t);
     }
 
+    const totalsByCurrency = [...totals.values()].sort((a, b) => a.currency.localeCompare(b.currency));
+    const baseTotal = totalsByCurrency.reduce((sum, t) => sum + t.baseAmount, 0);
+    for (const t of totalsByCurrency) t.share = baseTotal > 0 ? t.baseAmount / baseTotal : 0;
+
     return {
       rows,
-      totalsByCurrency: [...totals.values()].sort((a, b) => a.currency.localeCompare(b.currency)),
+      totalsByCurrency,
+      baseCurrency: this.baseCurrency,
+      baseTotal,
+      fxSource: this.fxSource,
       invoicesScanned: this.scanned,
       countrySources: { ...this.sources },
       generatedAt: new Date().toISOString(),
@@ -104,11 +121,12 @@ export function reportToCsv(report: RevenueReport): string {
     const s = String(v);
     return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
   };
-  const lines = [['country', 'currency', 'revenue', 'revenue_minor_units', 'invoices', 'customers'].join(',')];
+  const base = report.baseCurrency.toLowerCase();
+  const lines = [['country', 'currency', 'revenue', 'revenue_minor_units', `revenue_${base}`, 'invoices', 'customers'].join(',')];
   for (const r of report.rows) {
     const exp = minorUnitExponent(r.currency);
     lines.push(
-      [r.country, r.currency.toUpperCase(), toMajorUnits(r.amountMinor, r.currency).toFixed(exp), r.amountMinor, r.invoiceCount, r.customerCount]
+      [r.country, r.currency.toUpperCase(), toMajorUnits(r.amountMinor, r.currency).toFixed(exp), r.amountMinor, r.baseAmount.toFixed(minorUnitExponent(base)), r.invoiceCount, r.customerCount]
         .map(esc)
         .join(','),
     );

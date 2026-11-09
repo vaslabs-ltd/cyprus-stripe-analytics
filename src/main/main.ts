@@ -1,12 +1,13 @@
 import { app, BrowserWindow, dialog, ipcMain } from 'electron';
 import { writeFile } from 'node:fs/promises';
-import { existsSync } from 'node:fs';
+import { copyFileSync, existsSync } from 'node:fs';
 import path from 'node:path';
 import dotenv from 'dotenv';
 import type Stripe from 'stripe';
 import type { IpcResult, RevenueQuery, RevenueReport } from '../shared/types';
 import { createStripeClient, revenueByCountry } from './stripe';
 import { reportToCsv } from './analytics';
+import { FxRateStore } from './fx';
 
 /**
  * Load .env from the first location that exists:
@@ -23,6 +24,23 @@ let stripe: Stripe | null = null;
 function getStripe(): Stripe {
   stripe ??= createStripeClient(process.env.STRIPE_PASSKEY);
   return stripe;
+}
+
+let fxStore: FxRateStore | null = null;
+/**
+ * Dev: the committed data/fx-rates.csv in the project. Packaged app: a copy in the user
+ * config dir (the app bundle is read-only), seeded from the bundled file on first use.
+ */
+function getFxStore(): FxRateStore {
+  if (fxStore) return fxStore;
+  const bundled = path.join(app.getAppPath(), 'data', 'fx-rates.csv');
+  let file = process.env.FX_RATES_FILE || bundled;
+  if (!process.env.FX_RATES_FILE && app.isPackaged) {
+    file = path.join(app.getPath('userData'), 'fx-rates.csv');
+    if (!existsSync(file) && existsSync(bundled)) copyFileSync(bundled, file);
+  }
+  fxStore = new FxRateStore(file);
+  return fxStore;
 }
 
 async function wrap<T>(fn: () => Promise<T>): Promise<IpcResult<T>> {
@@ -53,7 +71,7 @@ function createWindow(): void {
 }
 
 ipcMain.handle('revenue-by-country', (event, query: RevenueQuery) =>
-  wrap(() => revenueByCountry(getStripe(), query ?? {}, (p) => event.sender.send('progress', p))),
+  wrap(() => revenueByCountry(getStripe(), getFxStore(), query ?? {}, (p) => event.sender.send('progress', p))),
 );
 
 ipcMain.handle('export-csv', (event, report: RevenueReport) =>
