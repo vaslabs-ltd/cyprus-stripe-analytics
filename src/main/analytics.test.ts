@@ -41,6 +41,25 @@ test('aggregates per country and currency, with base-currency shares', () => {
     ],
   );
 
+  // EUR view: one row per country, largest first; customer "a" paid in GBP and EUR in GB.
+  agg.add(fact({ customerId: 'a', currency: 'eur', amountPaid: 1000, customerCountry: 'GB' }), 10);
+  const r2 = agg.report({});
+  assert.deepEqual(
+    r2.countries.map((c) => [c.country, c.baseAmount, c.invoiceCount, c.customerCount, c.currencies]),
+    [
+      ['CY', 700, 1, 1, ['eur']],
+      ['GB', 228, 4, 2, ['eur', 'gbp']],
+      ['US', 82, 1, 1, ['usd']],
+    ],
+  );
+  assert.equal(r2.countries.reduce((sum, c) => sum + c.share, 0).toFixed(10), '1.0000000000');
+  assert.deepEqual(reportToCsv(r2, 'eur').trim().split('\n'), [
+    'country,revenue_eur,share,invoices,customers,currencies',
+    'CY,700.00,0.6931,1,1,EUR',
+    'GB,228.00,0.2257,4,2,EUR GBP',
+    'US,82.00,0.0812,1,1,USD',
+  ]);
+
   const csv = reportToCsv(r).trim().split('\n');
   assert.equal(csv[0], 'country,currency,revenue,revenue_minor_units,revenue_eur,invoices,customers');
   assert.equal(csv[3], 'GB,GBP,15.00,1500,18.00,2,1');

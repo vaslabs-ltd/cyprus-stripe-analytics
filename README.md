@@ -22,6 +22,11 @@ Reports cover complete past days only (UTC): they always end at yesterday at the
 
 Only **EUR, GBP and USD** are supported; an invoice in any other currency stops the report with an error.
 
+### EUR view
+The **EUR view** button switches the table to one row per country, with every currency converted
+to EUR and summed (≈ EUR, % of total, invoices, distinct customers, currencies paid in).
+Export CSV exports whichever view is showing. The currency filter doesn't apply in this view.
+
 ### Currency mix
 To compare currencies, each invoice is converted to **EUR** at the ECB reference rate on its
 payment date (`status_transitions.paid_at`). The app shows each currency's share of total revenue

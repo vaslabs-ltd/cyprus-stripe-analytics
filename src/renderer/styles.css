@@ -46,6 +46,8 @@ input, select, button {
 button { cursor: pointer; }
 button[type='submit'] { background: var(--accent); border-color: var(--accent); color: #fff; }
 button:disabled { opacity: 0.5; cursor: default; }
+button[aria-pressed='true'] { background: var(--accent); border-color: var(--accent); color: #fff; }
+tfoot td { font-weight: 600; border-bottom: none; }
 #status { color: var(--muted); align-self: center; }
 #status.error { color: var(--error); }
 

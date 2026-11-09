@@ -3,7 +3,7 @@ import type { Progress, StripeAnalyticsApi } from '../shared/types';
 
 const api: StripeAnalyticsApi = {
   revenueByCountry: (query) => ipcRenderer.invoke('revenue-by-country', query),
-  exportCsv: (report) => ipcRenderer.invoke('export-csv', report),
+  exportCsv: (report, view) => ipcRenderer.invoke('export-csv', report, view),
   onProgress: (cb) => {
     const listener = (_e: IpcRendererEvent, p: Progress) => cb(p);
     ipcRenderer.on('progress', listener);

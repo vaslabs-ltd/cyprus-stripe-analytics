@@ -33,9 +33,27 @@ export interface CurrencyTotal {
   invoiceCount: number;
 }
 
+/** All of a country's revenue, every currency converted to the base currency. */
+export interface CountryTotal {
+  country: string;
+  /** Major units of the base currency. */
+  baseAmount: number;
+  /** Fraction (0..1) of all revenue, measured in the base currency. */
+  share: number;
+  invoiceCount: number;
+  /** Distinct customers across all currencies. */
+  customerCount: number;
+  /** Lower-case currency codes this country paid in. */
+  currencies: string[];
+}
+
+export type ReportView = 'currency' | 'eur';
+
 export interface RevenueReport {
   rows: CountryCurrencyRevenue[];
   totalsByCurrency: CurrencyTotal[];
+  /** One row per country, all currencies converted to the base currency (largest first). */
+  countries: CountryTotal[];
   /** Lower-case currency code all amounts are converted to for comparison. */
   baseCurrency: string;
   /** Sum of all revenue in the base currency, major units. */
@@ -57,6 +75,6 @@ export type IpcResult<T> = { ok: true; value: T } | { ok: false; error: string }
 
 export interface StripeAnalyticsApi {
   revenueByCountry(query: RevenueQuery): Promise<IpcResult<RevenueReport>>;
-  exportCsv(report: RevenueReport): Promise<IpcResult<string | null>>;
+  exportCsv(report: RevenueReport, view: ReportView): Promise<IpcResult<string | null>>;
   onProgress(cb: (p: Progress) => void): () => void;
 }

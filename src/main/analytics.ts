@@ -1,4 +1,4 @@
-import type { CountryCurrencyRevenue, RevenueReport, RevenueQuery } from '../shared/types';
+import type { CountryCurrencyRevenue, CountryTotal, ReportView, RevenueReport, RevenueQuery } from '../shared/types';
 
 /** Minimal shape of the invoice data the aggregation needs (decoupled from the Stripe SDK). */
 export interface InvoiceFact {
@@ -28,6 +28,7 @@ export function resolveCountry(f: InvoiceFact): { country: string; source: Sourc
 
 export class RevenueAggregator {
   private readonly buckets = new Map<string, { row: CountryCurrencyRevenue; customers: Set<string> }>();
+  private readonly countryBuckets = new Map<string, { row: CountryTotal; customers: Set<string>; currencies: Set<string> }>();
   private readonly sources: RevenueReport['countrySources'] = {
     customerAddress: 0,
     invoiceSnapshot: 0,
@@ -60,6 +61,20 @@ export class RevenueAggregator {
     b.row.baseAmount += baseAmount;
     b.row.invoiceCount++;
     if (f.customerId) b.customers.add(f.customerId);
+
+    let cb = this.countryBuckets.get(country);
+    if (!cb) {
+      cb = {
+        row: { country, baseAmount: 0, share: 0, invoiceCount: 0, customerCount: 0, currencies: [] },
+        customers: new Set(),
+        currencies: new Set(),
+      };
+      this.countryBuckets.set(country, cb);
+    }
+    cb.row.baseAmount += baseAmount;
+    cb.row.invoiceCount++;
+    cb.currencies.add(currency);
+    if (f.customerId) cb.customers.add(f.customerId);
   }
 
   get invoicesScanned(): number {
@@ -84,9 +99,19 @@ export class RevenueAggregator {
     const baseTotal = totalsByCurrency.reduce((sum, t) => sum + t.baseAmount, 0);
     for (const t of totalsByCurrency) t.share = baseTotal > 0 ? t.baseAmount / baseTotal : 0;
 
+    const countries = [...this.countryBuckets.values()]
+      .map(({ row, customers, currencies }) => ({
+        ...row,
+        share: baseTotal > 0 ? row.baseAmount / baseTotal : 0,
+        customerCount: customers.size,
+        currencies: [...currencies].sort(),
+      }))
+      .sort((a, b) => b.baseAmount - a.baseAmount || a.country.localeCompare(b.country));
+
     return {
       rows,
       totalsByCurrency,
+      countries,
       baseCurrency: this.baseCurrency,
       baseTotal,
       fxSource: this.fxSource,
@@ -116,18 +141,37 @@ export function toMajorUnits(amountMinor: number, currency: string): number {
   return amountMinor / 10 ** minorUnitExponent(currency);
 }
 
-export function reportToCsv(report: RevenueReport): string {
-  const esc = (v: string | number) => {
-    const s = String(v);
-    return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
-  };
+export function reportToCsv(report: RevenueReport, view: ReportView = 'currency'): string {
+  return view === 'eur' ? countriesToCsv(report) : currencyRowsToCsv(report);
+}
+
+const csvEscape = (v: string | number) => {
+  const s = String(v);
+  return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+};
+
+function countriesToCsv(report: RevenueReport): string {
+  const base = report.baseCurrency.toLowerCase();
+  const exp = minorUnitExponent(base);
+  const lines = [['country', `revenue_${base}`, 'share', 'invoices', 'customers', 'currencies'].join(',')];
+  for (const c of report.countries) {
+    lines.push(
+      [c.country, c.baseAmount.toFixed(exp), c.share.toFixed(4), c.invoiceCount, c.customerCount, c.currencies.map((x) => x.toUpperCase()).join(' ')]
+        .map(csvEscape)
+        .join(','),
+    );
+  }
+  return lines.join('\n') + '\n';
+}
+
+function currencyRowsToCsv(report: RevenueReport): string {
   const base = report.baseCurrency.toLowerCase();
   const lines = [['country', 'currency', 'revenue', 'revenue_minor_units', `revenue_${base}`, 'invoices', 'customers'].join(',')];
   for (const r of report.rows) {
     const exp = minorUnitExponent(r.currency);
     lines.push(
       [r.country, r.currency.toUpperCase(), toMajorUnits(r.amountMinor, r.currency).toFixed(exp), r.amountMinor, r.baseAmount.toFixed(minorUnitExponent(base)), r.invoiceCount, r.customerCount]
-        .map(esc)
+        .map(csvEscape)
         .join(','),
     );
   }

@@ -4,7 +4,7 @@ import { copyFileSync, existsSync } from 'node:fs';
 import path from 'node:path';
 import dotenv from 'dotenv';
 import type Stripe from 'stripe';
-import type { IpcResult, RevenueQuery, RevenueReport } from '../shared/types';
+import type { IpcResult, ReportView, RevenueQuery, RevenueReport } from '../shared/types';
 import { createStripeClient, revenueByCountry } from './stripe';
 import { reportToCsv } from './analytics';
 import { FxRateStore } from './fx';
@@ -74,17 +74,17 @@ ipcMain.handle('revenue-by-country', (event, query: RevenueQuery) =>
   wrap(() => revenueByCountry(getStripe(), getFxStore(), query ?? {}, (p) => event.sender.send('progress', p))),
 );
 
-ipcMain.handle('export-csv', (event, report: RevenueReport) =>
+ipcMain.handle('export-csv', (event, report: RevenueReport, view: ReportView) =>
   wrap(async () => {
     const win = BrowserWindow.fromWebContents(event.sender);
     const opts = {
       title: 'Export revenue by country',
-      defaultPath: `revenue-by-country-${new Date().toISOString().slice(0, 10)}.csv`,
+      defaultPath: `revenue-by-country${view === 'eur' ? '-eur' : ''}-${new Date().toISOString().slice(0, 10)}.csv`,
       filters: [{ name: 'CSV', extensions: ['csv'] }],
     };
     const res = win ? await dialog.showSaveDialog(win, opts) : await dialog.showSaveDialog(opts);
     if (res.canceled || !res.filePath) return null;
-    await writeFile(res.filePath, reportToCsv(report), 'utf8');
+    await writeFile(res.filePath, reportToCsv(report, view), 'utf8');
     return res.filePath;
   }),
 );

@@ -1,4 +1,4 @@
-import type { CountryCurrencyRevenue, RevenueReport, StripeAnalyticsApi } from '../shared/types';
+import type { CountryCurrencyRevenue, CountryTotal, ReportView, RevenueReport, StripeAnalyticsApi } from '../shared/types';
 
 declare global {
   interface Window {
@@ -21,11 +21,20 @@ const table = $<HTMLTableElement>('#table');
 const tbody = table.querySelector('tbody')!;
 const baseTh = table.querySelector<HTMLTableCellElement>('th[data-sort="base"]')!;
 const metaEl = $<HTMLElement>('#meta');
+const eurViewBtn = $<HTMLButtonElement>('#eur-view');
+const eurTable = $<HTMLTableElement>('#eur-table');
+const eurTbody = eurTable.querySelector('tbody')!;
+const eurTfoot = eurTable.querySelector('tfoot')!;
 
 type SortKey = 'country' | 'currency' | 'amount' | 'base' | 'share' | 'invoices' | 'customers';
 let report: RevenueReport | null = null;
 let sortKey: SortKey = 'amount';
 let sortAsc = false;
+let view: ReportView = 'currency';
+
+type EurSortKey = 'country' | 'base' | 'share' | 'invoices' | 'customers' | 'currencies';
+let eurSortKey: EurSortKey = 'base';
+let eurSortAsc = false;
 
 const countryNames = new Intl.DisplayNames(undefined, { type: 'region' });
 function countryName(code: string): string {
@@ -67,6 +76,8 @@ function formatBase(r: RevenueReport, amount: number): string {
   return formatMoney(Math.round(amount * 100), r.baseCurrency, 2);
 }
 
+const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
+
 const pctFmt = new Intl.NumberFormat(undefined, { style: 'percent', minimumFractionDigits: 1, maximumFractionDigits: 1 });
 
 function renderTotals(r: RevenueReport, currency: string): void {
@@ -79,7 +90,7 @@ function renderTotals(r: RevenueReport, currency: string): void {
       el('div', 'k', `Total ${t.currency.toUpperCase()}`),
       el('div', 'v', formatMoney(t.amountMinor, t.currency, t.exponent)),
       el('div', 'share-line', `${pctFmt.format(t.share)} of revenue`),
-      el('div', 'n', `≈ ${formatBase(r, t.baseAmount)} · ${t.invoiceCount} invoices · ${countries} countries`),
+      el('div', 'n', `≈ ${formatBase(r, t.baseAmount)} · ${plural(t.invoiceCount, 'invoice')} · ${plural(countries, 'country', 'countries')}`),
     );
     cards.append(card);
   }
@@ -105,6 +116,85 @@ function renderTotals(r: RevenueReport, currency: string): void {
   totalsEl.replaceChildren(mix, cards);
 }
 
+function shareCell(fraction: number): HTMLTableCellElement {
+  const td = el('td', 'num share');
+  const bar = el('div', 'bar');
+  bar.style.width = `${(fraction * 100).toFixed(1)}%`;
+  td.append(bar, el('span', undefined, pctFmt.format(fraction)));
+  return td;
+}
+
+function countryCell(code: string): HTMLTableCellElement {
+  const td = el('td', undefined, countryName(code));
+  td.append(el('span', 'code', code));
+  return td;
+}
+
+function markSorted(t: HTMLTableElement, key: string, asc: boolean): void {
+  for (const th of t.querySelectorAll<HTMLTableCellElement>('th[data-sort]')) {
+    th.classList.toggle('sorted', th.dataset.sort === key);
+    th.classList.toggle('asc', th.dataset.sort === key && asc);
+  }
+}
+
+/** EUR view: one row per country, every currency converted to the base currency. */
+function renderEurTable(r: RevenueReport): void {
+  const rows = [...r.countries];
+  const cmp: Record<EurSortKey, (a: CountryTotal, b: CountryTotal) => number> = {
+    country: (a, b) => countryName(a.country).localeCompare(countryName(b.country)),
+    base: (a, b) => a.baseAmount - b.baseAmount,
+    share: (a, b) => a.share - b.share,
+    invoices: (a, b) => a.invoiceCount - b.invoiceCount,
+    customers: (a, b) => a.customerCount - b.customerCount,
+    currencies: (a, b) => a.currencies.join().localeCompare(b.currencies.join()),
+  };
+  rows.sort((a, b) => cmp[eurSortKey](a, b) * (eurSortAsc ? 1 : -1));
+
+  eurTbody.replaceChildren(
+    ...rows.map((c) => {
+      const tr = el('tr');
+      tr.append(
+        countryCell(c.country),
+        el('td', 'num', formatBase(r, c.baseAmount)),
+        shareCell(c.share),
+        el('td', 'num', String(c.invoiceCount)),
+        el('td', 'num', String(c.customerCount)),
+        el('td', undefined, c.currencies.map((x) => x.toUpperCase()).join(', ')),
+      );
+      return tr;
+    }),
+  );
+
+  const foot = el('tr');
+  foot.append(
+    el('td', undefined, `Total · ${plural(r.countries.length, 'country', 'countries')}`),
+    el('td', 'num', formatBase(r, r.baseTotal)),
+    el('td', 'num', pctFmt.format(r.baseTotal > 0 ? 1 : 0)),
+    el('td', 'num', String(r.countries.reduce((n, c) => n + c.invoiceCount, 0))),
+    el('td'),
+    el('td'),
+  );
+  eurTfoot.replaceChildren(foot);
+
+  const baseLabel = `≈ ${r.baseCurrency.toUpperCase()}`;
+  eurTable.querySelector<HTMLTableCellElement>('th[data-sort="base"]')!.textContent = baseLabel;
+  markSorted(eurTable, eurSortKey, eurSortAsc);
+}
+
+function render(): void {
+  if (!report) return;
+  const eur = view === 'eur';
+  eurViewBtn.setAttribute('aria-pressed', String(eur));
+  // The currency filter only applies to the per-currency view.
+  currencySelect.disabled = eur;
+  table.hidden = eur;
+  eurTable.hidden = !eur;
+  if (eur) {
+    renderEurTable(report);
+    renderTotals(report, '');
+  } else renderTable();
+}
+
 function renderTable(): void {
   if (!report) return;
   const currency = currencySelect.value;
@@ -127,15 +217,9 @@ function renderTable(): void {
   tbody.replaceChildren(
     ...rows.map((r) => {
       const tr = el('tr');
-      const countryTd = el('td', undefined, countryName(r.country));
-      countryTd.append(el('span', 'code', r.country));
-      const pct = share(r);
-      const shareTd = el('td', 'num share');
-      const bar = el('div', 'bar');
-      bar.style.width = `${(pct * 100).toFixed(1)}%`;
-      shareTd.append(bar, el('span', undefined, `${(pct * 100).toFixed(1)}%`));
+      const shareTd = shareCell(share(r));
       tr.append(
-        countryTd,
+        countryCell(r.country),
         el('td', undefined, r.currency.toUpperCase()),
         el('td', 'num', formatMoney(r.amountMinor, r.currency, r.exponent)),
         el('td', 'num muted', formatBase(report!, r.baseAmount)),
@@ -147,10 +231,7 @@ function renderTable(): void {
     }),
   );
 
-  for (const th of table.querySelectorAll<HTMLTableCellElement>('th[data-sort]')) {
-    th.classList.toggle('sorted', th.dataset.sort === sortKey);
-    th.classList.toggle('asc', th.dataset.sort === sortKey && sortAsc);
-  }
+  markSorted(table, sortKey, sortAsc);
   baseTh.textContent = `≈ ${report.baseCurrency.toUpperCase()}`;
   table.hidden = false;
   renderTotals(report, currency);
@@ -240,22 +321,43 @@ form.addEventListener('submit', async (e) => {
   e.preventDefault();
   loadBtn.disabled = true;
   exportBtn.disabled = true;
+  eurViewBtn.disabled = true;
   setStatus('Fetching…');
   const res = await api.revenueByCountry({ from: fromInput.value || undefined, to: toInput.value || undefined });
   loadBtn.disabled = false;
   if (!res.ok) {
     setStatus(res.error, true);
+    // Keep the previous report usable.
+    exportBtn.disabled = eurViewBtn.disabled = !report;
     return;
   }
   report = res.value;
   populateCurrencies(report);
-  renderTable();
+  render();
   renderMeta(report);
   exportBtn.disabled = false;
+  eurViewBtn.disabled = false;
   setStatus(`Loaded ${report.invoicesScanned} invoices`);
 });
 
 currencySelect.addEventListener('change', renderTable);
+
+eurViewBtn.addEventListener('click', () => {
+  view = view === 'eur' ? 'currency' : 'eur';
+  render();
+});
+
+eurTable.querySelector('thead')!.addEventListener('click', (e) => {
+  const th = (e.target as HTMLElement).closest<HTMLTableCellElement>('th[data-sort]');
+  if (!th) return;
+  const key = th.dataset.sort as EurSortKey;
+  if (key === eurSortKey) eurSortAsc = !eurSortAsc;
+  else {
+    eurSortKey = key;
+    eurSortAsc = key === 'country' || key === 'currencies';
+  }
+  renderEurTable(report!);
+});
 
 table.querySelector('thead')!.addEventListener('click', (e) => {
   const th = (e.target as HTMLElement).closest<HTMLTableCellElement>('th[data-sort]');
@@ -271,7 +373,7 @@ table.querySelector('thead')!.addEventListener('click', (e) => {
 
 exportBtn.addEventListener('click', async () => {
   if (!report) return;
-  const res = await api.exportCsv(report);
+  const res = await api.exportCsv(report, view);
   if (!res.ok) setStatus(res.error, true);
   else if (res.value) setStatus(`Exported to ${res.value}`);
 });
