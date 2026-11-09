@@ -41,6 +41,7 @@ input, select, button {
   border-radius: 6px;
   background: var(--card);
   color: var(--fg);
+  height: 32px;
 }
 button { cursor: pointer; }
 button[type='submit'] { background: var(--accent); border-color: var(--accent); color: #fff; }

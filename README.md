@@ -15,6 +15,7 @@ The country comes from the first one of these that is set:
 4. otherwise `??` (Unknown)
 
 The footer shows how many invoices used each source. You can filter by date range (invoice `created`, UTC) and currency, sort by any column, and export to CSV.
+The Quarter/Year pickers fill in the date range for a calendar quarter; only quarters that have fully ended can be picked.
 
 Not counted: refunds, credit notes, and invoices that are only partly paid (`open`).
 Reports cover complete past days only (UTC): they always end at yesterday at the latest.

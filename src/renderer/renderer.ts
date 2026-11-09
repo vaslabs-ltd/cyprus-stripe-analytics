@@ -183,6 +183,57 @@ fromInput.max = yesterdayUtc;
 toInput.max = yesterdayUtc;
 toInput.placeholder = yesterdayUtc;
 
+// Quarter shortcut: picks complete calendar quarters only (UTC). A quarter that hasn't
+// ended yet (the current one) and anything in the future are disabled.
+const quarterSelect = $<HTMLSelectElement>('#quarter');
+const yearSelect = $<HTMLSelectElement>('#year');
+const QUARTER_YEARS_BACK = 10;
+
+function quarterRange(year: number, q: number): { from: string; to: string } {
+  const start = new Date(Date.UTC(year, (q - 1) * 3, 1));
+  const end = new Date(Date.UTC(year, q * 3, 0)); // day 0 of the next quarter = last day of this one
+  return { from: start.toISOString().slice(0, 10), to: end.toISOString().slice(0, 10) };
+}
+
+const isQuarterComplete = (year: number, q: number) => quarterRange(year, q).to <= yesterdayUtc;
+
+function populateYears(): void {
+  const current = new Date().getUTCFullYear();
+  for (let y = current + 1; y > current - QUARTER_YEARS_BACK; y--) {
+    const o = el('option', undefined, String(y));
+    o.value = String(y);
+    o.disabled = !isQuarterComplete(y, 1);
+    yearSelect.append(o);
+  }
+  // Default to the latest year with at least one complete quarter.
+  yearSelect.value = String(isQuarterComplete(current, 1) ? current : current - 1);
+}
+
+function updateQuarterOptions(): void {
+  const year = Number(yearSelect.value);
+  for (const o of quarterSelect.options) {
+    if (o.value) o.disabled = !isQuarterComplete(year, Number(o.value));
+  }
+  if (quarterSelect.selectedOptions[0]?.disabled) quarterSelect.value = '';
+}
+
+function applyQuarter(): void {
+  if (!quarterSelect.value) return;
+  const { from, to } = quarterRange(Number(yearSelect.value), Number(quarterSelect.value));
+  fromInput.value = from;
+  toInput.value = to;
+}
+
+populateYears();
+updateQuarterOptions();
+quarterSelect.addEventListener('change', applyQuarter);
+yearSelect.addEventListener('change', () => {
+  updateQuarterOptions();
+  applyQuarter();
+});
+// Editing the dates by hand means they no longer describe a quarter.
+for (const input of [fromInput, toInput]) input.addEventListener('input', () => (quarterSelect.value = ''));
+
 api.onProgress((p) => setStatus(`Fetching… ${p.invoicesScanned} invoices`));
 
 form.addEventListener('submit', async (e) => {
