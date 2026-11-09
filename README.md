@@ -4,7 +4,9 @@ A desktop app (Electron + TypeScript) for Linux/Fedora that pulls analytics from
 
 ## Reports
 
-### Revenue by country
+The app has one tab per report.
+
+### Country Revenue (Central Bank statistics)
 Sum of `amount_paid` across invoices with status `paid`, grouped by **customer country** and **invoice currency**.
 Currencies are never converted or mixed.
 
@@ -45,6 +47,31 @@ the publication day the rate came from. Only dates missing from the file are req
 codes and dates are sent to it, never Stripe data. Commit the file after runs that add rates.
 In the packaged app, the file is copied to `~/.config/Stripe Analytics/fx-rates.csv` on first use
 (set `FX_RATES_FILE` to use a different path).
+
+### Cyprus VAT
+Finalized invoices (`paid`, `open`, `uncollectible`; never `draft` or `void`) whose **invoice date**
+(`effective_at`, else the finalization date) falls in the chosen VAT quarter, split into:
+
+- **Cyprus VAT**: customers in Cyprus. Net, VAT and gross per invoice; the summary shows the
+  output VAT owed for the quarter and how much of it has been collected (invoice paid).
+- **VIES**: customers in other EU countries (B2B, reverse charge). Shown **per month**, with one
+  line per customer VAT number, which is what the monthly VIES return asks for, plus the invoices behind it.
+- **International**: everyone else (B2B, outside the scope of Cyprus VAT).
+
+Quarters default to the legacy Cyprus scheme (Mar–May, Jun–Aug, Sep–Nov, Dec–Feb); calendar
+quarters can be picked instead. The current quarter can be loaded too ("to date").
+Amounts are converted to EUR at the ECB rate on the invoice date (same rate cache as above),
+rounded per invoice. The country is the one on the invoice's address snapshot first, then the
+customer's address; the VAT number is the one snapshotted on the invoice.
+
+Each invoice shows its tax treatment from Stripe Tax (`taxability_reason`: standard rate, exempt
+product, 0% rate, reverse charge, …), and the Cyprus summary shows how much of the net is 0%/exempt
+(e.g. B2C tutoring). Rows are flagged for review when: a Cyprus invoice has no VAT *and* Stripe
+recorded no exemption or 0% rate for it, an EU invoice has VAT or no
+VAT number, an international invoice has VAT, or the country is unknown.
+Not included: credit notes/refunds and input VAT. Invoices are listed by creation date going
+back 365 days before the quarter, to catch invoices finalized or back-dated into it.
+Export CSV writes one row per invoice.
 
 ## Stripe key (read-only)
 

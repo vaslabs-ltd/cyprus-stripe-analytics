@@ -73,8 +73,101 @@ export interface Progress {
 
 export type IpcResult<T> = { ok: true; value: T } | { ok: false; error: string };
 
+/** Cyprus VAT report sections: domestic (CY VAT), EU B2B (VIES, reverse charge), rest of the world. */
+export type VatSection = 'cy' | 'vies' | 'intl';
+
+export interface VatQuery {
+  /** Inclusive start, ISO date (YYYY-MM-DD), UTC. */
+  from: string;
+  /** Inclusive end, ISO date (YYYY-MM-DD), UTC. */
+  to: string;
+}
+
+/** One finalized invoice, dated by its invoice date (the VAT tax point). EUR amounts are in cents. */
+export interface VatInvoice {
+  id: string;
+  /** Invoice number as printed on the invoice. */
+  number: string | null;
+  /** Invoice date (YYYY-MM-DD, UTC). */
+  date: string;
+  /** YYYY-MM of `date`; VIES is reported per month. */
+  month: string;
+  /** Stripe status: paid, open or uncollectible. */
+  status: string;
+  customerId: string | null;
+  customerName: string | null;
+  /** ISO country code, or "??" when unknown. */
+  country: string;
+  /** Customer VAT number snapshotted on the invoice (EU VAT number preferred). */
+  vatNumber: string | null;
+  section: VatSection;
+  /** Lower-case invoice currency. */
+  currency: string;
+  exponent: number;
+  /** Invoice total including VAT, in the invoice currency's minor units. */
+  totalMinor: number;
+  /**
+   * Stripe's taxability reasons on the invoice (e.g. standard_rated, product_exempt,
+   * reverse_charge), deduplicated. Empty when no tax was calculated.
+   */
+  taxReasons: string[];
+  netEurCents: number;
+  vatEurCents: number;
+  /** netEurCents + vatEurCents. */
+  grossEurCents: number;
+  /** Things to double-check before filing, e.g. VAT charged on a reverse-charge invoice. */
+  warnings: string[];
+}
+
+export interface VatSectionSummary {
+  section: VatSection;
+  invoiceCount: number;
+  customerCount: number;
+  netEurCents: number;
+  vatEurCents: number;
+  grossEurCents: number;
+  /** VAT on invoices that have been paid (collected). */
+  vatPaidEurCents: number;
+  /** Net sales on invoices with no VAT (0% rated or exempt). */
+  noVatNetEurCents: number;
+  /** Invoices still open or marked uncollectible. */
+  unpaidCount: number;
+}
+
+/** A VIES listing line: one customer (VAT number) in one month. */
+export interface ViesLine {
+  country: string;
+  vatNumber: string | null;
+  customerName: string | null;
+  netEurCents: number;
+  invoiceCount: number;
+}
+
+export interface ViesMonth {
+  /** YYYY-MM. */
+  month: string;
+  netEurCents: number;
+  invoiceCount: number;
+  lines: ViesLine[];
+}
+
+export interface VatReport {
+  /** The period actually covered (`to` is clipped to yesterday). */
+  query: VatQuery;
+  invoices: VatInvoice[];
+  summaries: Record<VatSection, VatSectionSummary>;
+  /** Every month of the period, in order, including months without EU sales. */
+  viesMonths: ViesMonth[];
+  fxSource: string;
+  /** Invoices fetched from Stripe (including ones outside the period or not finalized). */
+  invoicesScanned: number;
+  generatedAt: string;
+}
+
 export interface StripeAnalyticsApi {
   revenueByCountry(query: RevenueQuery): Promise<IpcResult<RevenueReport>>;
   exportCsv(report: RevenueReport, view: ReportView): Promise<IpcResult<string | null>>;
+  vatReport(query: VatQuery): Promise<IpcResult<VatReport>>;
+  exportVatCsv(report: VatReport): Promise<IpcResult<string | null>>;
   onProgress(cb: (p: Progress) => void): () => void;
 }

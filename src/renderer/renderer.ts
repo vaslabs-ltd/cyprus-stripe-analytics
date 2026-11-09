@@ -1,4 +1,6 @@
 import type { CountryCurrencyRevenue, CountryTotal, ReportView, RevenueReport, StripeAnalyticsApi } from '../shared/types';
+import { $, countryCell, countryName, el, formatMoney, pctFmt, plural, setStatus as setStatusOn, yesterdayUtc } from './ui.js';
+import { initVatTab } from './vat.js';
 
 declare global {
   interface Window {
@@ -7,7 +9,30 @@ declare global {
 }
 
 const api = window.stripeAnalytics;
-const $ = <T extends HTMLElement>(sel: string) => document.querySelector(sel) as T;
+
+// Tabs: each report lives in its own panel; the tab bar only toggles visibility.
+const tabs = [...document.querySelectorAll<HTMLButtonElement>('[role="tab"]')];
+function selectTab(tab: HTMLButtonElement): void {
+  for (const t of tabs) {
+    const selected = t === tab;
+    t.setAttribute('aria-selected', String(selected));
+    t.tabIndex = selected ? 0 : -1;
+    document.getElementById(t.getAttribute('aria-controls')!)!.hidden = !selected;
+  }
+}
+for (const t of tabs) t.addEventListener('click', () => selectTab(t));
+$<HTMLElement>('[role="tablist"]').addEventListener('keydown', (e) => {
+  if (e.key !== 'ArrowRight' && e.key !== 'ArrowLeft') return;
+  const i = tabs.indexOf(document.activeElement as HTMLButtonElement);
+  if (i < 0) return;
+  const next = tabs[(i + (e.key === 'ArrowRight' ? 1 : tabs.length - 1)) % tabs.length];
+  selectTab(next);
+  next.focus();
+});
+
+initVatTab(api);
+
+// ---- Country Revenue tab ----
 
 const form = $<HTMLFormElement>('#query');
 const fromInput = $<HTMLInputElement>('#from');
@@ -36,49 +61,11 @@ type EurSortKey = 'country' | 'base' | 'share' | 'invoices' | 'customers' | 'cur
 let eurSortKey: EurSortKey = 'base';
 let eurSortAsc = false;
 
-const countryNames = new Intl.DisplayNames(undefined, { type: 'region' });
-function countryName(code: string): string {
-  if (code === '??') return 'Unknown';
-  try {
-    return countryNames.of(code) ?? code;
-  } catch {
-    return code;
-  }
-}
-
-function formatMoney(amountMinor: number, currency: string, exponent: number): string {
-  const amount = amountMinor / 10 ** exponent;
-  try {
-    return new Intl.NumberFormat(undefined, {
-      style: 'currency',
-      currency: currency.toUpperCase(),
-      minimumFractionDigits: exponent,
-      maximumFractionDigits: exponent,
-    }).format(amount);
-  } catch {
-    return `${amount.toFixed(exponent)} ${currency.toUpperCase()}`;
-  }
-}
-
-function setStatus(text: string, error = false): void {
-  statusEl.textContent = text;
-  statusEl.classList.toggle('error', error);
-}
-
-function el<K extends keyof HTMLElementTagNameMap>(tag: K, cls?: string, text?: string): HTMLElementTagNameMap[K] {
-  const e = document.createElement(tag);
-  if (cls) e.className = cls;
-  if (text !== undefined) e.textContent = text;
-  return e;
-}
+const setStatus = (text: string, error = false) => setStatusOn(statusEl, text, error);
 
 function formatBase(r: RevenueReport, amount: number): string {
   return formatMoney(Math.round(amount * 100), r.baseCurrency, 2);
 }
-
-const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
-
-const pctFmt = new Intl.NumberFormat(undefined, { style: 'percent', minimumFractionDigits: 1, maximumFractionDigits: 1 });
 
 function renderTotals(r: RevenueReport, currency: string): void {
   const cards = el('div', 'cards');
@@ -121,12 +108,6 @@ function shareCell(fraction: number): HTMLTableCellElement {
   const bar = el('div', 'bar');
   bar.style.width = `${(fraction * 100).toFixed(1)}%`;
   td.append(bar, el('span', undefined, pctFmt.format(fraction)));
-  return td;
-}
-
-function countryCell(code: string): HTMLTableCellElement {
-  const td = el('td', undefined, countryName(code));
-  td.append(el('span', 'code', code));
   return td;
 }
 
@@ -259,7 +240,6 @@ function populateCurrencies(r: RevenueReport): void {
 }
 
 // Reports cover complete past days only (UTC), ending yesterday at the latest.
-const yesterdayUtc = new Date(Date.now() - 86_400_000).toISOString().slice(0, 10);
 fromInput.max = yesterdayUtc;
 toInput.max = yesterdayUtc;
 toInput.placeholder = yesterdayUtc;
@@ -315,7 +295,10 @@ yearSelect.addEventListener('change', () => {
 // Editing the dates by hand means they no longer describe a quarter.
 for (const input of [fromInput, toInput]) input.addEventListener('input', () => (quarterSelect.value = ''));
 
-api.onProgress((p) => setStatus(`Fetching… ${p.invoicesScanned} invoices`));
+let loading = false;
+api.onProgress((p) => {
+  if (loading) setStatus(`Fetching… ${p.invoicesScanned} invoices`);
+});
 
 form.addEventListener('submit', async (e) => {
   e.preventDefault();
@@ -323,7 +306,9 @@ form.addEventListener('submit', async (e) => {
   exportBtn.disabled = true;
   eurViewBtn.disabled = true;
   setStatus('Fetching…');
+  loading = true;
   const res = await api.revenueByCountry({ from: fromInput.value || undefined, to: toInput.value || undefined });
+  loading = false;
   loadBtn.disabled = false;
   if (!res.ok) {
     setStatus(res.error, true);

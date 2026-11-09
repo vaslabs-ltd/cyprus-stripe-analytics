@@ -7,9 +7,15 @@
     <link rel="stylesheet" href="styles.css" />
   </head>
   <body>
+    <nav class="tabs" role="tablist" aria-label="Reports">
+      <button type="button" role="tab" id="tab-country" aria-controls="panel-country" aria-selected="true">Country Revenue</button>
+      <button type="button" role="tab" id="tab-vat" aria-controls="panel-vat" aria-selected="false" tabindex="-1">Cyprus VAT</button>
+    </nav>
+
+    <section id="panel-country" role="tabpanel" aria-labelledby="tab-country">
     <header>
       <h1>Revenue by country</h1>
-      <p class="sub">Paid invoices, grouped by customer country and invoice currency.</p>
+      <p class="sub">Paid invoices, grouped by customer country and invoice currency (Central Bank statistics).</p>
     </header>
 
     <form id="query">
@@ -31,7 +37,7 @@
       <button type="submit" id="load">Load from Stripe</button>
       <button type="button" id="eur-view" aria-pressed="false" disabled title="One row per country, all currencies converted to EUR">EUR view</button>
       <button type="button" id="export" disabled>Export CSV</button>
-      <span id="status" role="status"></span>
+      <span id="status" class="status" role="status"></span>
     </form>
 
     <section id="totals"></section>
@@ -67,6 +73,43 @@
     </table>
 
     <footer id="meta"></footer>
+    </section>
+
+    <section id="panel-vat" role="tabpanel" aria-labelledby="tab-vat" hidden>
+      <header>
+        <h1>Cyprus VAT</h1>
+        <p class="sub">Finalized invoices by invoice date, in EUR: Cyprus VAT (quarterly), VIES reverse charge (monthly) and international.</p>
+      </header>
+
+      <form id="vat-query">
+        <label>Quarters
+          <select id="vat-scheme">
+            <option value="legacy">Mar–May, Jun–Aug, Sep–Nov, Dec–Feb</option>
+            <option value="calendar">Jan–Mar, Apr–Jun, Jul–Sep, Oct–Dec</option>
+          </select>
+        </label>
+        <label>VAT quarter <select id="vat-period"></select></label>
+        <button type="submit" id="vat-load">Load from Stripe</button>
+        <button type="button" id="vat-export" disabled>Export CSV</button>
+        <span id="vat-status" class="status" role="status"></span>
+      </form>
+
+      <div id="vat-content" hidden>
+        <section id="vat-summary" class="cards"></section>
+
+        <h2>Cyprus VAT <span class="h-sub">customers in Cyprus · VAT charged</span></h2>
+        <div id="vat-cy"></div>
+
+        <h2>VIES <span class="h-sub">EU business customers · reverse charge · reported monthly</span></h2>
+        <div id="vat-vies-months" class="cards"></div>
+        <div id="vat-vies"></div>
+
+        <h2>International <span class="h-sub">customers outside the EU · outside the scope of Cyprus VAT</span></h2>
+        <div id="vat-intl"></div>
+      </div>
+
+      <footer id="vat-meta"></footer>
+    </section>
 
     <script type="module" src="renderer.js"></script>
   </body>

@@ -4,8 +4,9 @@ import { copyFileSync, existsSync } from 'node:fs';
 import path from 'node:path';
 import dotenv from 'dotenv';
 import type Stripe from 'stripe';
-import type { IpcResult, ReportView, RevenueQuery, RevenueReport } from '../shared/types';
-import { createStripeClient, revenueByCountry } from './stripe';
+import type { IpcResult, ReportView, RevenueQuery, RevenueReport, VatQuery, VatReport } from '../shared/types';
+import { createStripeClient, revenueByCountry, vatReport } from './stripe';
+import { vatReportToCsv } from './vat';
 import { reportToCsv } from './analytics';
 import { FxRateStore } from './fx';
 
@@ -74,19 +75,34 @@ ipcMain.handle('revenue-by-country', (event, query: RevenueQuery) =>
   wrap(() => revenueByCountry(getStripe(), getFxStore(), query ?? {}, (p) => event.sender.send('progress', p))),
 );
 
+async function saveCsv(sender: Electron.WebContents, title: string, defaultPath: string, csv: () => string): Promise<string | null> {
+  const win = BrowserWindow.fromWebContents(sender);
+  const opts = { title, defaultPath, filters: [{ name: 'CSV', extensions: ['csv'] }] };
+  const res = win ? await dialog.showSaveDialog(win, opts) : await dialog.showSaveDialog(opts);
+  if (res.canceled || !res.filePath) return null;
+  await writeFile(res.filePath, csv(), 'utf8');
+  return res.filePath;
+}
+
 ipcMain.handle('export-csv', (event, report: RevenueReport, view: ReportView) =>
-  wrap(async () => {
-    const win = BrowserWindow.fromWebContents(event.sender);
-    const opts = {
-      title: 'Export revenue by country',
-      defaultPath: `revenue-by-country${view === 'eur' ? '-eur' : ''}-${new Date().toISOString().slice(0, 10)}.csv`,
-      filters: [{ name: 'CSV', extensions: ['csv'] }],
-    };
-    const res = win ? await dialog.showSaveDialog(win, opts) : await dialog.showSaveDialog(opts);
-    if (res.canceled || !res.filePath) return null;
-    await writeFile(res.filePath, reportToCsv(report, view), 'utf8');
-    return res.filePath;
-  }),
+  wrap(() =>
+    saveCsv(
+      event.sender,
+      'Export revenue by country',
+      `revenue-by-country${view === 'eur' ? '-eur' : ''}-${new Date().toISOString().slice(0, 10)}.csv`,
+      () => reportToCsv(report, view),
+    ),
+  ),
+);
+
+ipcMain.handle('vat-report', (event, query: VatQuery) =>
+  wrap(() => vatReport(getStripe(), getFxStore(), query, (p) => event.sender.send('progress', p))),
+);
+
+ipcMain.handle('export-vat-csv', (event, report: VatReport) =>
+  wrap(() =>
+    saveCsv(event.sender, 'Export Cyprus VAT report', `cyprus-vat-${report.query.from}-to-${report.query.to}.csv`, () => vatReportToCsv(report)),
+  ),
 );
 
 app.whenReady().then(() => {
