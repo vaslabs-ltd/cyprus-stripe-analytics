@@ -2,6 +2,8 @@ import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron';
 import type { Progress, StripeAnalyticsApi } from '../shared/types';
 
 const api: StripeAnalyticsApi = {
+  keyStatus: () => ipcRenderer.invoke('key-status'),
+  saveKey: (key) => ipcRenderer.invoke('save-key', key),
   revenueByCountry: (query) => ipcRenderer.invoke('revenue-by-country', query),
   exportCsv: (report, view) => ipcRenderer.invoke('export-csv', report, view),
   vatReport: (query) => ipcRenderer.invoke('vat-report', query),

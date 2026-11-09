@@ -1,24 +1,46 @@
 import { app, BrowserWindow, dialog, ipcMain } from 'electron';
-import { writeFile } from 'node:fs/promises';
+import { chmod, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { copyFileSync, existsSync } from 'node:fs';
 import path from 'node:path';
 import dotenv from 'dotenv';
 import type Stripe from 'stripe';
-import type { IpcResult, ReportView, RevenueQuery, RevenueReport, VatQuery, VatReport } from '../shared/types';
-import { createStripeClient, revenueByCountry, vatReport } from './stripe';
+import type { IpcResult, KeyStatus, ReportView, RevenueQuery, RevenueReport, VatQuery, VatReport } from '../shared/types';
+import { checkKeyAccess, createStripeClient, isRestrictedKey, revenueByCountry, vatReport } from './stripe';
 import { vatReportToCsv } from './vat';
 import { reportToCsv } from './analytics';
 import { FxRateStore } from './fx';
 
 /**
+ * The app's config dir: ~/.config/vaslabs-ltd/stripe-analytics on Linux,
+ * %APPDATA%\vaslabs-ltd\stripe-analytics on Windows.
+ */
+function configDir(): string {
+  return path.join(app.getPath('appData'), 'vaslabs-ltd', 'stripe-analytics');
+}
+const configEnvFile = () => path.join(configDir(), '.env');
+
+/**
  * Load .env from the first location that exists:
  *  1. the current working directory (dev: `npm start`)
- *  2. the user config dir, e.g. ~/.config/stripe-analytics/.env (installed app)
+ *  2. the config dir (where a key entered in the app is saved)
+ *  3. the old location, Electron's userData dir (e.g. ~/.config/Stripe Analytics/.env)
+ * A STRIPE_PASSKEY already in the environment wins over all of them.
  */
 function loadEnv(): void {
-  const candidates = [path.join(process.cwd(), '.env'), path.join(app.getPath('userData'), '.env')];
+  const candidates = [path.join(process.cwd(), '.env'), configEnvFile(), path.join(app.getPath('userData'), '.env')];
   const found = candidates.find((p) => existsSync(p));
   if (found) dotenv.config({ path: found, quiet: true });
+}
+
+/** Save the key to the config dir's .env (owner-only permissions), keeping any other lines. */
+async function saveKey(key: string): Promise<string> {
+  const file = configEnvFile();
+  await mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
+  const existing = existsSync(file) ? (await readFile(file, 'utf8')).split(/\r?\n/) : [];
+  const kept = existing.filter((l) => l.trim() && !/^\s*(export\s+)?STRIPE_PASSKEY\s*=/.test(l));
+  await writeFile(file, [...kept, `STRIPE_PASSKEY=${key}`].join('\n') + '\n', { mode: 0o600 });
+  await chmod(file, 0o600); // writeFile's mode only applies when it creates the file
+  return file;
 }
 
 let stripe: Stripe | null = null;
@@ -70,6 +92,23 @@ function createWindow(): void {
   win.webContents.on('will-navigate', (e) => e.preventDefault());
   void win.loadFile(path.join(__dirname, '..', 'renderer', 'index.html'));
 }
+
+ipcMain.handle('key-status', (): KeyStatus => {
+  const key = process.env.STRIPE_PASSKEY;
+  return { state: !key ? 'missing' : isRestrictedKey(key) ? 'ok' : 'invalid', configFile: configEnvFile() };
+});
+
+ipcMain.handle('save-key', (_event, raw: unknown) =>
+  wrap(async () => {
+    const key = typeof raw === 'string' ? raw.trim() : '';
+    const client = createStripeClient(key); // throws unless it's a restricted rk_ key
+    await checkKeyAccess(client);
+    const file = await saveKey(key);
+    process.env.STRIPE_PASSKEY = key;
+    stripe = client;
+    return file;
+  }),
+);
 
 ipcMain.handle('revenue-by-country', (event, query: RevenueQuery) =>
   wrap(() => revenueByCountry(getStripe(), getFxStore(), query ?? {}, (p) => event.sender.send('progress', p))),

@@ -10,7 +10,8 @@
     "start": "npm run build && electron .",
     "test": "npm run build && node --test \"dist/**/*.test.js\"",
     "dist": "npm run build && electron-builder --linux AppImage rpm --publish never",
-    "dist:appimage": "npm run build && electron-builder --linux AppImage --publish never"
+    "dist:appimage": "npm run build && electron-builder --linux AppImage --publish never",
+    "dist:win": "npm run build && electron-builder --win nsis --x64 --publish never"
   },
   "author": "Vaslabs <engineering@vaslabs.io>",
   "dependencies": {
@@ -45,7 +46,22 @@
       ],
       "maintainer": "engineering@vaslabs.io"
     },
-    "artifactName": "stripe-analytics-${version}-${arch}.${ext}"
+    "artifactName": "stripe-analytics-${version}-${arch}.${ext}",
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "nsis": {
+      "artifactName": "stripe-analytics-${version}-setup-${arch}.${ext}",
+      "oneClick": true,
+      "perMachine": false
+    }
   },
   "license": "UNLICENSED"
 }

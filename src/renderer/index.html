@@ -10,7 +10,28 @@
     <nav class="tabs" role="tablist" aria-label="Reports">
       <button type="button" role="tab" id="tab-country" aria-controls="panel-country" aria-selected="true">Country Revenue</button>
       <button type="button" role="tab" id="tab-vat" aria-controls="panel-vat" aria-selected="false" tabindex="-1">Cyprus VAT</button>
+      <button type="button" id="key-open" class="tabs-end">Stripe key…</button>
     </nav>
+
+    <dialog id="key-dialog" aria-labelledby="key-title">
+      <form id="key-form" method="dialog">
+        <h2 id="key-title">Stripe API key</h2>
+        <p id="key-reason"></p>
+        <p class="hint">
+          Create a <strong>restricted key</strong> in the Stripe Dashboard → Developers → API keys,
+          with <strong>Read</strong> access to Invoices and Customers. Secret keys (sk_…) are refused.
+        </p>
+        <label>Restricted key
+          <input type="password" id="key-input" placeholder="rk_live_…" autocomplete="off" spellcheck="false" required />
+        </label>
+        <p class="hint">Saved to <code id="key-file"></code>, readable only by you.</p>
+        <p id="key-error" class="status error" role="alert"></p>
+        <div class="dialog-actions">
+          <button type="button" id="key-cancel">Cancel</button>
+          <button type="submit" id="key-save" class="primary">Check and save</button>
+        </div>
+      </form>
+    </dialog>
 
     <section id="panel-country" role="tabpanel" aria-labelledby="tab-country">
     <header>

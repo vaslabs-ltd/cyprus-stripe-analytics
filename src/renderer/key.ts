@@ -1,0 +1,49 @@
+import type { StripeAnalyticsApi } from '../shared/types';
+import { $ } from './ui.js';
+
+/**
+ * Stripe key dialog. Opens by itself at startup when no usable key is configured, and from the
+ * "Stripe key…" button to replace one. The key goes to the main process once and is never read back.
+ */
+export async function initKeyDialog(api: StripeAnalyticsApi): Promise<void> {
+  const dialog = $<HTMLDialogElement>('#key-dialog');
+  const form = $<HTMLFormElement>('#key-form');
+  const input = $<HTMLInputElement>('#key-input');
+  const reason = $<HTMLElement>('#key-reason');
+  const error = $<HTMLElement>('#key-error');
+  const fileEl = $<HTMLElement>('#key-file');
+  const save = $<HTMLButtonElement>('#key-save');
+
+  const open = async (why: string) => {
+    const status = await api.keyStatus();
+    fileEl.textContent = status.configFile;
+    reason.textContent = why;
+    error.textContent = '';
+    input.value = '';
+    dialog.showModal();
+    input.focus();
+  };
+
+  $<HTMLButtonElement>('#key-open').addEventListener('click', () => void open(''));
+  $<HTMLButtonElement>('#key-cancel').addEventListener('click', () => dialog.close());
+
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    save.disabled = true;
+    error.textContent = 'Checking with Stripe…';
+    error.classList.remove('error');
+    const res = await api.saveKey(input.value);
+    save.disabled = false;
+    error.classList.add('error');
+    if (!res.ok) {
+      error.textContent = res.error;
+      return;
+    }
+    input.value = '';
+    dialog.close();
+  });
+
+  const status = await api.keyStatus();
+  if (status.state === 'missing') await open('No Stripe key found. Enter one to load reports.');
+  else if (status.state === 'invalid') await open('The configured Stripe key is not a restricted (rk_…) key. Enter a restricted key instead.');
+}

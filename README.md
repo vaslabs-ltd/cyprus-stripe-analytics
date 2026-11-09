@@ -81,13 +81,19 @@ Create a **restricted key** in the Stripe Dashboard → Developers → API keys,
 
 The app won't start a query with a standard `sk_` secret key; it accepts only `rk_` restricted keys.
 
-Put it in `.env` (which git ignores):
+**On first start, the app asks for the key** if it can't find one (or finds a non-restricted
+one). It checks the key with one read call each to Invoices and Customers, then saves it to:
 
-```
-STRIPE_PASSKEY=rk_live_...
-```
+- Linux: `~/.config/vaslabs-ltd/stripe-analytics/.env` (`$XDG_CONFIG_HOME` is respected)
+- Windows: `%APPDATA%\vaslabs-ltd\stripe-analytics\.env`
 
-`.env` is read from the current directory first, then from `~/.config/stripe-analytics/.env` (`~/.config/Stripe Analytics/.env` for the packaged app). The key stays in the Electron main process and is never sent to the UI.
+as `STRIPE_PASSKEY=rk_...`, readable only by you (mode 600 on Linux). The **Stripe key…** button
+replaces it. You can also write that file yourself.
+
+The key is read from the first of these that exists: `.env` in the current directory (handy for
+`npm start`), the file above, then the old location (`~/.config/Stripe Analytics/.env`).
+A `STRIPE_PASSKEY` environment variable wins over all of them. After you type it in, the key
+stays in the Electron main process and is never sent back to the UI.
 
 ## Development
 
@@ -100,8 +106,9 @@ npm run typecheck
 
 ## Download (GitLab CI)
 
-Every pipeline builds the AppImage. Open the pipeline's `appimage` job and click **Download**
-(artifacts are kept for 30 days); on merge requests it also shows up as "AppImage".
+Every pipeline builds the Linux AppImage and the Windows installer. Open the pipeline's
+`appimage` or `windows` job and click **Download** (artifacts are kept for 30 days); on merge
+requests they also show up as "AppImage" and "Windows installer".
 
 For a permanent download, tag a release:
 
@@ -109,19 +116,30 @@ For a permanent download, tag a release:
 git tag v0.2.0 && git push origin v0.2.0
 ```
 
-The tag's version is used for the build, the AppImage is uploaded to the project's package
-registry, and a GitLab Release (Deploy → Releases) links to it, with a SHA-256 checksum.
+The tag's version is used for the build, both files are uploaded to the project's package
+registry, and a GitLab Release (Deploy → Releases) links to them, with SHA-256 checksums.
 
-To run it:
+To run it on Linux:
 
 ```sh
 chmod +x stripe-analytics-0.2.0-x86_64.AppImage
-mkdir -p ~/.config/"Stripe Analytics"
-echo 'STRIPE_PASSKEY=rk_live_...' > ~/.config/"Stripe Analytics"/.env
-./stripe-analytics-0.2.0-x86_64.AppImage
+./stripe-analytics-0.2.0-x86_64.AppImage   # asks for the Stripe key on first start
 ```
 
-AppImages need FUSE (`sudo dnf install fuse-libs` if it's missing). CI never needs the Stripe key.
+AppImages need FUSE (`sudo dnf install fuse-libs` if it's missing).
+
+On Windows, run `stripe-analytics-0.2.0-setup-x64.exe`. It installs for the current user (no admin
+rights) and adds a Start-menu entry. The installer isn't code-signed, so SmartScreen asks first:
+**More info → Run anyway**.
+
+CI never needs the Stripe key.
+
+### Windows builds on Linux
+
+The `windows` job cross-compiles on the normal Linux runner (`node:22-bookworm`), with no Windows
+runner. electron-builder runs the Windows resource tools through Wine, and the NSIS installer runs
+a 32-bit stub to build its uninstaller, so the job installs Debian's `wine`, `wine64` and
+`wine32:i386`.
 
 ## Packaging locally
 
@@ -129,6 +147,8 @@ AppImages need FUSE (`sudo dnf install fuse-libs` if it's missing). CI never nee
 sudo dnf install rpm-build   # needed for the rpm target
 npm run dist                 # writes an AppImage and an .rpm to release/
 npm run dist:appimage        # AppImage only (what CI builds)
+sudo dnf install wine        # needed for the Windows build
+npm run dist:win             # Windows installer: release/stripe-analytics-<version>-setup-x64.exe
 ```
 
 ## Layout

@@ -8,12 +8,25 @@ import { buildVatReport, VAT_STATUSES, type VatInvoiceFact } from './vat';
  * Only restricted keys (rk_...) are accepted. A standard secret key (sk_...) has full
  * write access to the account, which this app never needs.
  */
+export const isRestrictedKey = (key: string | undefined): key is string => !!key && /^rk_(live|test)_/.test(key);
+
 export function createStripeClient(key: string | undefined): Stripe {
-  if (!key) throw new Error('STRIPE_PASSKEY is not set. Put a restricted, read-only key in .env.');
-  if (!/^rk_(live|test)_/.test(key)) {
+  if (!key) throw new Error('No Stripe key set. Enter a restricted, read-only key with "Stripe key…".');
+  if (!isRestrictedKey(key)) {
     throw new Error('Refusing to use a non-restricted Stripe key. Create a restricted key with read-only access to Invoices and Customers.');
   }
   return new Stripe(key, { maxNetworkRetries: 3, appInfo: { name: 'stripe-analytics' } });
+}
+
+/** Make one read call per resource the reports need, so a wrong or under-permissioned key fails now. */
+export async function checkKeyAccess(stripe: Stripe): Promise<void> {
+  try {
+    await stripe.invoices.list({ limit: 1 });
+    await stripe.customers.list({ limit: 1 });
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    throw new Error(`Stripe rejected the key: ${msg}`);
+  }
 }
 
 function dateToUnix(date: string, endOfDay: boolean): number {
