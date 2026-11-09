@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:;" />
+    <title>Stripe Analytics</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <header>
+      <h1>Revenue by country</h1>
+      <p class="sub">Paid invoices, grouped by customer country and invoice currency.</p>
+    </header>
+
+    <form id="query">
+      <label>From <input type="date" id="from" /></label>
+      <label>To <input type="date" id="to" /></label>
+      <label>Currency
+        <select id="currency"><option value="">All</option></select>
+      </label>
+      <button type="submit" id="load">Load from Stripe</button>
+      <button type="button" id="export" disabled>Export CSV</button>
+      <span id="status" role="status"></span>
+    </form>
+
+    <section id="totals" class="cards"></section>
+
+    <table id="table" hidden>
+      <thead>
+        <tr>
+          <th data-sort="country">Country</th>
+          <th data-sort="currency">Currency</th>
+          <th data-sort="amount" class="num">Revenue</th>
+          <th data-sort="share" class="num">% of currency</th>
+          <th data-sort="invoices" class="num">Invoices</th>
+          <th data-sort="customers" class="num">Customers</th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+
+    <footer id="meta"></footer>
+
+    <script type="module" src="renderer.js"></script>
+  </body>
+</html>

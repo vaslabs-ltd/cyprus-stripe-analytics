@@ -1,0 +1,48 @@
+{
+  "name": "stripe-analytics",
+  "version": "0.1.0",
+  "description": "Desktop analytics for Stripe invoices (read-only)",
+  "main": "dist/main/main.js",
+  "scripts": {
+    "clean": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\"",
+    "build": "npm run clean && tsc -p tsconfig.main.json && tsc -p tsconfig.renderer.json && node scripts/copy-static.mjs",
+    "typecheck": "tsc -p tsconfig.main.json --noEmit && tsc -p tsconfig.renderer.json --noEmit",
+    "start": "npm run build && electron .",
+    "test": "npm run build && node --test \"dist/**/*.test.js\"",
+    "dist": "npm run build && electron-builder --linux AppImage rpm"
+  },
+  "author": "Vaslabs <engineering@vaslabs.io>",
+  "dependencies": {
+    "dotenv": "^18.0.10",
+    "stripe": "^23.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.6",
+    "electron": "^45.2.3",
+    "electron-builder": "^26.18.0",
+    "typescript": "^7.0.2"
+  },
+  "private": true,
+  "build": {
+    "appId": "io.vaslabs.stripe-analytics",
+    "productName": "Stripe Analytics",
+    "files": [
+      "dist/**/*",
+      "!dist/**/*.test.js",
+      "!dist/**/*.map",
+      "package.json"
+    ],
+    "directories": {
+      "output": "release"
+    },
+    "linux": {
+      "category": "Office",
+      "target": [
+        "AppImage",
+        "rpm"
+      ],
+      "maintainer": "engineering@vaslabs.io"
+    }
+  },
+  "license": "UNLICENSED"
+}
