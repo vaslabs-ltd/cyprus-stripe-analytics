@@ -7,7 +7,9 @@
  * they get, depend only on that month, so a quarter shows the same numbers every time. Statuses
  * still move with time (an invoice due last week is open today and paid later).
  *
- * Every name, email (.example) and VAT number ("DEMO" in it) is made up.
+ * Every name, email (.example) and VAT number ("DEMO" in it) is fictional and generated
+ * automatically. Business names are marked "(demo)" and private customers get well-known
+ * placeholder names (John Doe, …); any resemblance to real people or businesses is coincidental.
  */
 import { isoDate } from './fx';
 import type { CustomerLike, InvoiceLike, InvoiceListParams, InvoiceSource } from './stripe';
@@ -49,7 +51,8 @@ const OTHER = ['CH', 'NO', 'CA', 'AU', 'IL', 'SG', 'AE'] as const;
 
 const WORDS_A = ['Blue', 'Cedar', 'Harbor', 'Granite', 'Copper', 'Lumen', 'Orbit', 'Juniper', 'Kestrel', 'Meridian', 'Nimbus', 'Olive', 'Pixel', 'Quartz', 'Saffron', 'Tidal'];
 const WORDS_B = ['Labs', 'Studio', 'Systems', 'Analytics', 'Works', 'Digital', 'Partners', 'Software', 'Media', 'Robotics'];
-const FIRST = ['Maria', 'Andreas', 'Eleni', 'Nikos', 'Sofia', 'Kostas', 'Anna', 'Petros'];
+// Private customers get well-known placeholder names, so none can look like a real person.
+const PEOPLE = ['John Doe', 'Jane Doe', 'Joe Bloggs', 'Jane Roe', 'Richard Roe', 'John Q. Public', 'Max Mustermann', 'Erika Mustermann'];
 const PRICES = [49, 99, 149, 249, 499, 1200]; // major units per month
 
 interface DemoCustomer {
@@ -111,7 +114,8 @@ function newCustomer(year: number, month: number, i: number): DemoCustomer {
   }
   const a = r();
   const addressOn = a < 0.82 ? 'customer' : a < 0.92 ? 'invoice' : a < 0.97 ? 'shipping' : 'none';
-  const name = segment === 'cy_b2c' ? `${pick(r, FIRST)} ${String.fromCharCode(65 + Math.floor(r() * 26))}.` : `${pick(r, WORDS_A)} ${pick(r, WORDS_B)}`;
+  // Random word pairs can match a real business: the "(demo)" marks them as made up.
+  const name = segment === 'cy_b2c' ? pick(r, PEOPLE) : `${pick(r, WORDS_A)} ${pick(r, WORDS_B)} (demo)`;
   const slug = name.toLowerCase().replace(/[^a-z]+/g, '');
   const addr = { country };
   return {

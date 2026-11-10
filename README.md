@@ -23,11 +23,44 @@ registration and supports only EUR, GBP and USD invoices; other setups will need
 It isn't tax or accounting advice: check the figures before you file them.
 This project isn't affiliated with or endorsed by Stripe.
 
+## Try it: demo mode
+
+![Entering the demo key in the Stripe key dialog](docs/gifs/demo-key.gif)
+
+To try the app without a Stripe account, enter **`rk_demo`** as the key. The reports then show
+generated data instead of calling Stripe: made-up customers in Cyprus, the EU and elsewhere, paying
+in EUR, GBP and USD from January 2025 to yesterday. A few invoices are wrong on purpose so the VAT
+tab has something to flag. A given month always shows the same invoices.
+
+> **All demo data is fictional.** Customer names, emails, VAT numbers and amounts are generated
+> automatically and don't describe any real person, business or transaction. Business names are
+> random word pairs marked "(demo)", private customers have placeholder names (John Doe, Jane Roe, …),
+> emails use the reserved `.example` domain and VAT numbers contain `DEMO`. Any resemblance to real
+> people or businesses is coincidental. The same applies to the GIFs in this README, which are
+> recorded in demo mode.
+
+A banner, the window title and the **Load demo data** buttons show when it's on. Demo mode is
+never saved:
+
+- The demo key isn't written to the `.env` file and doesn't replace a saved key; restarting the
+  app goes back to the real key. A `STRIPE_PASSKEY=rk_demo` in a `.env` file or the environment is
+  ignored.
+- The generated invoices only exist in memory.
+- Exchange rates for demo reports use a separate cache, `demo/fx-rates.csv` in the cache folder
+  below (seeded from the bundled file), so they never mix with the real one.
+- CSV exports are named `demo-…csv` by default.
+
+Entering a real key leaves demo mode, and the window reloads so no report from the other mode stays
+on screen.
+
 ## Reports
 
 The app has one tab per report.
 
 ### Country Revenue (Central Bank Services Survey, QSRVS)
+
+![Loading a quarter, sorting and filtering by currency on the Country Revenue tab](docs/gifs/country-revenue.gif)
+
 Sum of `amount_paid` across invoices with status `paid`, grouped by **customer country** and **invoice currency**.
 Currencies are never converted or mixed.
 
@@ -45,7 +78,10 @@ Reports cover complete past days only (UTC): they always end at yesterday at the
 
 Only **EUR, GBP and USD** are supported; an invoice in any other currency stops the report with an error.
 
-### EUR view
+### EUR view and export
+
+![Switching to the EUR view and exporting it to CSV](docs/gifs/eur-view.gif)
+
 The **EUR view** button switches the table to one row per country, with every currency converted
 to EUR and summed (≈ EUR, % of total, invoices, distinct customers, currencies paid in).
 Export CSV exports whichever view is showing. The currency filter doesn't apply in this view.
@@ -76,6 +112,9 @@ from the bundled file. Deleting it is safe: missing rates are fetched again. Set
 to use a different path.
 
 ### Cyprus VAT
+
+![Picking a VAT quarter scheme and loading the Cyprus VAT report](docs/gifs/vat.gif)
+
 Finalized invoices (`paid`, `open`, `uncollectible`; never `draft` or `void`) whose **invoice date**
 (`effective_at`, else the finalization date) falls in the chosen VAT quarter, split into:
 
@@ -95,6 +134,10 @@ Amounts are converted to EUR at the ECB rate on the invoice date (same rate cach
 rounded per invoice. The country is the one on the invoice's address snapshot first, then the
 customer's address; the VAT number is the one snapshotted on the invoice.
 
+#### VIES, international and flagged invoices
+
+![The monthly VIES listing, flagged rows and international invoices](docs/gifs/vies.gif)
+
 Each invoice shows its tax treatment from Stripe Tax (`taxability_reason`: standard rate, exempt
 product, 0% rate, reverse charge, …), and the Cyprus summary shows how much of the net is 0%/exempt
 (e.g. B2C tutoring). Rows are flagged for review when: a Cyprus invoice has no VAT *and* Stripe
@@ -103,27 +146,6 @@ VAT number, an international invoice has VAT, or the country is unknown.
 Not included: credit notes/refunds and input VAT. Invoices are listed by creation date going
 back 365 days before the quarter, to catch invoices finalized or back-dated into it.
 Export CSV writes one row per invoice.
-
-## Demo mode
-
-To try the app without a Stripe account, enter **`rk_demo`** as the key. The reports then show
-generated data instead of calling Stripe: made-up customers in Cyprus, the EU and elsewhere, paying
-in EUR, GBP and USD from January 2025 to yesterday. A few invoices are wrong on purpose so the VAT
-tab has something to flag. A given month always shows the same invoices.
-
-A banner, the window title and the **Load demo data** buttons show when it's on. Demo mode is
-never saved:
-
-- The demo key isn't written to the `.env` file and doesn't replace a saved key; restarting the
-  app goes back to the real key. A `STRIPE_PASSKEY=rk_demo` in a `.env` file or the environment is
-  ignored.
-- The generated invoices only exist in memory.
-- Exchange rates for demo reports use a separate cache, `demo/fx-rates.csv` in the cache folder
-  below (seeded from the bundled file), so they never mix with the real one.
-- CSV exports are named `demo-…csv` by default.
-
-Entering a real key leaves demo mode, and the window reloads so no report from the other mode stays
-on screen.
 
 ## Stripe key (read-only)
 
@@ -155,6 +177,24 @@ npm start        # build and launch
 npm test         # unit tests for the aggregation
 npm run typecheck
 ```
+
+### Demo GIFs
+
+The GIFs in this README are recorded from the real app in demo mode by
+[`scripts/demo-gifs/record.mjs`](scripts/demo-gifs/record.mjs), so they can be regenerated
+whenever the UI changes:
+
+```sh
+npm run gifs              # all of them, into docs/gifs/
+npm run gifs -- vat vies  # only some scenes
+xvfb-run npm run gifs     # on a machine without a display
+```
+
+It needs `ffmpeg` on the `PATH`. [Playwright](https://playwright.dev) (`playwright-core`, no
+browser download) drives the app; captions, the highlight and the pointer are added to the page
+for the recording. Each scene is a short list of steps (move, click, caption, hold), one GIF per
+scene. The app runs with temporary config and cache folders and no `STRIPE_PASSKEY`, so a real key
+or real Stripe data can't end up in a recording.
 
 ## Download
 

@@ -36,8 +36,9 @@ test('demo invoices: supported currencies, nothing in the future, newest first, 
     assert.ok((SUPPORTED_CURRENCIES as readonly string[]).includes(i.currency));
     assert.ok(i.created <= now);
     if (i.status === 'paid') assert.ok(i.status_transitions.paid_at! <= now);
-    const c = i.customer as { email: string };
+    const c = i.customer as { email: string; name: string };
     assert.match(c.email, /\.example$/);
+    assert.ok(/\(demo\)$/.test(c.name) || /(Doe|Bloggs|Roe|Public|Mustermann)$/.test(c.name), c.name);
     for (const t of i.customer_tax_ids ?? []) assert.match(t.value!, /DEMO/);
   }
   for (let k = 1; k < invs.length; k++) assert.ok(invs[k - 1].created >= invs[k].created);
