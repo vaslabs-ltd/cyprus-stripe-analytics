@@ -1,12 +1,33 @@
 # Stripe Analytics
 
-A desktop app (Electron + TypeScript) for Linux/Fedora that pulls analytics from your Stripe invoices.
+A desktop app (Electron + TypeScript) for Linux and Windows that builds regulatory reports from
+your Stripe invoices, using a read-only key.
+
+## What it's for
+
+[Vaslabs](https://vaslabs.io), a company registered in Cyprus that bills its customers through
+Stripe, built this for two recurring filings:
+
+1. **Central Bank statistics.** Each calendar quarter, the Central Bank of Cyprus collects the
+   Services Survey (QSRVS) through its EDX e-business platform. The **Country Revenue** tab gives
+   the revenue side of it, paid invoice totals per customer country and currency for the
+   quarter, with a EUR view and a currency mix.
+2. **VAT and VIES returns.** The **Cyprus VAT** tab splits a VAT quarter's invoices into domestic
+   (output VAT owed), EU B2B (the monthly VIES listing, per customer VAT number) and
+   international, and flags invoices whose tax treatment looks wrong. Cyprus VAT quarters have
+   traditionally been staggered (Mar–May, Jun–Aug, Sep–Nov, Dec–Feb) and are moving to calendar
+   quarters, so the tab supports both.
+
+It's published as-is in case it helps someone with the same setup. It assumes a Cyprus VAT
+registration and supports only EUR, GBP and USD invoices; other setups will need changes.
+It isn't tax or accounting advice: check the figures before you file them.
+This project isn't affiliated with or endorsed by Stripe.
 
 ## Reports
 
 The app has one tab per report.
 
-### Country Revenue (Central Bank statistics)
+### Country Revenue (Central Bank Services Survey, QSRVS)
 Sum of `amount_paid` across invoices with status `paid`, grouped by **customer country** and **invoice currency**.
 Currencies are never converted or mixed.
 
@@ -64,8 +85,12 @@ Finalized invoices (`paid`, `open`, `uncollectible`; never `draft` or `void`) wh
   line per customer VAT number, which is what the monthly VIES return asks for, plus the invoices behind it.
 - **International**: everyone else (B2B, outside the scope of Cyprus VAT).
 
-Quarters default to the legacy Cyprus scheme (Mar–May, Jun–Aug, Sep–Nov, Dec–Feb); calendar
-quarters can be picked instead. The current quarter can be loaded too ("to date").
+**VAT quarters.** Cyprus VAT periods have traditionally been staggered quarters starting in March:
+Mar–May, Jun–Aug, Sep–Nov and Dec–Feb (which spans two calendar years). Cyprus is moving VAT
+returns to calendar quarters (Jan–Mar, Apr–Jun, Jul–Sep, Oct–Dec). The quarter picker defaults to
+the legacy scheme, and a scheme selector switches to calendar quarters. Pick whichever scheme your
+VAT return is on for the period you're filing; for the return that covers the switch, check the
+period dates the Tax Department gives you. The current quarter can be loaded too ("to date").
 Amounts are converted to EUR at the ECB rate on the invoice date (same rate cache as above),
 rounded per invoice. The country is the one on the invoice's address snapshot first, then the
 customer's address; the VAT number is the one snapshotted on the invoice.
@@ -110,20 +135,14 @@ npm test         # unit tests for the aggregation
 npm run typecheck
 ```
 
-## Download (GitLab CI)
+## Download
 
-Every pipeline builds the Linux AppImage and the Windows installer. Open the pipeline's
-`appimage` or `windows` job and click **Download** (artifacts are kept for 30 days); on merge
-requests they also show up as "AppImage" and "Windows installer".
+Get the latest build from the GitHub **Releases** page:
 
-For a permanent download, tag a release:
+- Linux: `stripe-analytics-<version>-x86_64.AppImage`
+- Windows: `stripe-analytics-<version>-setup-x64.exe`
 
-```sh
-git tag v0.2.0 && git push origin v0.2.0
-```
-
-The tag's version is used for the build, both files are uploaded to the project's package
-registry, and a GitLab Release (Deploy → Releases) links to them, with SHA-256 checksums.
+Each file has a `.sha256` checksum next to it.
 
 To run it on Linux:
 
@@ -132,20 +151,41 @@ chmod +x stripe-analytics-0.2.0-x86_64.AppImage
 ./stripe-analytics-0.2.0-x86_64.AppImage   # asks for the Stripe key on first start
 ```
 
-AppImages need FUSE (`sudo dnf install fuse-libs` if it's missing).
+AppImages need FUSE (`sudo dnf install fuse-libs` on Fedora, `sudo apt install libfuse2` on Debian/Ubuntu).
 
 On Windows, run `stripe-analytics-0.2.0-setup-x64.exe`. It installs for the current user (no admin
 rights) and adds a Start-menu entry. The installer isn't code-signed, so SmartScreen asks first:
 **More info → Run anyway**.
 
+## Releases (CI)
+
 CI never needs the Stripe key.
 
-### Windows builds on Linux
+### GitHub Actions
 
-The `windows` job cross-compiles on the normal Linux runner (`node:22-bookworm`), with no Windows
-runner. electron-builder runs the Windows resource tools through Wine, and the NSIS installer runs
-a 32-bit stub to build its uninstaller, so the job installs Debian's `wine`, `wine64` and
-`wine32:i386`.
+[`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs the typecheck and tests, then builds
+the AppImage (Ubuntu runner) and the Windows installer (Windows runner). On pull requests the
+files are kept as run artifacts for 30 days.
+
+**Every push to `master` is released automatically.** The workflow tags the commit with the next
+version and creates a GitHub Release with both files and their checksums. The version
+([`scripts/next-version.mjs`](scripts/next-version.mjs)) is the next patch after the newest
+`vX.Y.Z` tag. For a minor or major release, set a higher `version` in `package.json` and push;
+that version is used as-is.
+
+### GitLab CI
+
+[`.gitlab-ci.yml`](.gitlab-ci.yml) builds the same two files on every pipeline (job artifacts,
+kept for 30 days). Tags like `v0.2.0` also upload them to the project's package registry and
+create a GitLab Release:
+
+```sh
+git tag v0.2.0 && git push origin v0.2.0
+```
+
+The `windows` job cross-compiles on a Linux runner (`node:22-bookworm`). electron-builder runs the
+Windows resource tools through Wine, and the NSIS installer runs a 32-bit stub to build its
+uninstaller, so the job installs Debian's `wine`, `wine64` and `wine32:i386`.
 
 ## Packaging locally
 
@@ -165,3 +205,7 @@ src/preload/   contextBridge API exposed to the UI
 src/renderer/  UI (sandboxed, no Node access)
 src/shared/    types shared by main and renderer
 ```
+
+## License
+
+[MIT](LICENSE) © Vaslabs Ltd

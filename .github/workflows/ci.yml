@@ -1,0 +1,141 @@
+# Tests, then builds the Linux AppImage and the Windows installer.
+#  - Pull requests: test + build; the files are downloadable from the run's artifacts.
+#  - Pushes to master: also tag the commit with the next version and create a GitHub Release
+#    with both files and their SHA-256 checksums. See scripts/next-version.mjs for the version.
+#
+# No Stripe key is needed or used in CI: building the app doesn't talk to Stripe.
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Runs on master queue up one at a time, so each one sees the tag the previous one created.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  NODE_VERSION: 22
+
+jobs:
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # tags
+      - id: v
+        run: echo "version=$(node scripts/next-version.mjs)" >> "$GITHUB_OUTPUT"
+      - run: echo "Version ${{ steps.v.outputs.version }}" >> "$GITHUB_STEP_SUMMARY"
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      - run: npm run typecheck
+      - run: npm test
+
+  appimage:
+    needs: [version, test]
+    runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      - run: npm version --no-git-tag-version --allow-same-version "$VERSION"
+      - run: npm run dist:appimage
+      - name: Checksum
+        run: |
+          mkdir out
+          cp "release/stripe-analytics-${VERSION}-x86_64.AppImage" out/
+          cd out && sha256sum *.AppImage | tee "stripe-analytics-${VERSION}-x86_64.AppImage.sha256"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: appimage
+          path: out/
+          if-no-files-found: error
+          retention-days: 30
+
+  # Built natively on a Windows runner (no Wine needed, unlike the GitLab job).
+  windows:
+    needs: [version, test]
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      - run: npm version --no-git-tag-version --allow-same-version "$VERSION"
+      - run: npm run dist:win
+      - name: Checksum
+        run: |
+          mkdir out
+          cp "release/stripe-analytics-${VERSION}-setup-x64.exe" out/
+          cd out && sha256sum *.exe | tee "stripe-analytics-${VERSION}-setup-x64.exe.sha256"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: out/
+          if-no-files-found: error
+          retention-days: 30
+
+  release:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+    needs: [version, appimage, windows]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # create the tag and the release
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: assets
+          merge-multiple: true
+      - run: ls -l assets
+      - name: Tag and release
+        run: |
+          APPIMAGE="stripe-analytics-${VERSION}-x86_64.AppImage"
+          EXE="stripe-analytics-${VERSION}-setup-x64.exe"
+          cat > notes.md <<EOF
+          Stripe Analytics ${VERSION} for Linux (AppImage) and Windows (installer).
+
+          - Linux: \`chmod +x ${APPIMAGE} && ./${APPIMAGE}\`
+          - Windows: run \`${EXE}\` (unsigned: SmartScreen asks to confirm, "More info" → "Run anyway").
+
+          On first start the app asks for a restricted, read-only Stripe key and saves it to
+          \`~/.config/vaslabs-ltd/stripe-analytics/.env\` (Linux) or \`%APPDATA%\vaslabs-ltd\stripe-analytics\.env\` (Windows).
+          EOF
+          # Creates the tag v$VERSION on this commit.
+          gh release create "v${VERSION}" assets/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "Stripe Analytics v${VERSION}" \
+            --notes-file notes.md \
+            --generate-notes
