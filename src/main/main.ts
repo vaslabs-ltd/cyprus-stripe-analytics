@@ -5,7 +5,8 @@ import path from 'node:path';
 import dotenv from 'dotenv';
 import type Stripe from 'stripe';
 import type { IpcResult, KeyStatus, ReportView, RevenueQuery, RevenueReport, VatQuery, VatReport } from '../shared/types';
-import { checkKeyAccess, createStripeClient, isRestrictedKey, revenueByCountry, vatReport } from './stripe';
+import { checkKeyAccess, createStripeClient, isRestrictedKey, revenueByCountry, stripeInvoiceSource, vatReport, type InvoiceSource } from './stripe';
+import { demoInvoiceSource, isDemoKey } from './demo';
 import { vatReportToCsv } from './vat';
 import { reportToCsv } from './analytics';
 import { FxRateStore } from './fx';
@@ -31,6 +32,8 @@ function loadEnv(): void {
   const candidates = [path.join(process.cwd(), '.env'), configEnvFile(), path.join(app.getPath('userData'), '.env')];
   const found = candidates.find((p) => existsSync(p));
   if (found) dotenv.config({ path: found, quiet: true });
+  // Demo mode only starts from the key dialog, never from a saved or exported key.
+  if (isDemoKey(process.env.STRIPE_PASSKEY)) delete process.env.STRIPE_PASSKEY;
 }
 
 /** Save the key to the config dir's .env (owner-only permissions), keeping any other lines. */
@@ -45,18 +48,29 @@ async function saveKey(key: string): Promise<string> {
 }
 
 let stripe: Stripe | null = null;
-function getStripe(): Stripe {
+
+/**
+ * Demo mode (key `rk_demo`): generated invoices instead of Stripe. Kept in memory only, so a
+ * restart is back on the real key, and it uses its own FX cache (see getFxStore).
+ */
+let demo = false;
+let demoSource: InvoiceSource | null = null;
+
+function getInvoices(): InvoiceSource {
+  if (demo) return (demoSource ??= demoInvoiceSource());
   stripe ??= createStripeClient(process.env.STRIPE_PASSKEY);
-  return stripe;
+  return stripeInvoiceSource(stripe);
 }
 
 let fxStore: FxRateStore | null = null;
+let demoFxStore: FxRateStore | null = null;
 /**
  * Dev: the committed data/fx-rates.csv in the project. Packaged app: a copy in the user's cache
  * dir (see cacheDir; the app bundle is read-only). The copy is seeded on first use from the
  * cache the app used before (in Electron's userData dir) if there is one, else the bundled file.
  */
 function getFxStore(): FxRateStore {
+  if (demo) return getDemoFxStore();
   if (fxStore) return fxStore;
   let file = process.env.FX_RATES_FILE || path.join(app.getAppPath(), 'data', 'fx-rates.csv');
   if (!process.env.FX_RATES_FILE && app.isPackaged) {
@@ -73,6 +87,22 @@ function getFxStore(): FxRateStore {
   }
   fxStore = new FxRateStore(file);
   return fxStore;
+}
+
+/**
+ * Demo mode's FX cache lives in its own folder (<cache dir>/demo/fx-rates.csv), seeded from the
+ * bundled file, so demo runs never add rows to the real cache or to the committed data file.
+ */
+function getDemoFxStore(): FxRateStore {
+  if (demoFxStore) return demoFxStore;
+  const file = path.join(cacheDir(process.platform, process.env, app.getPath('home')), 'demo', 'fx-rates.csv');
+  const bundled = path.join(app.getAppPath(), 'data', 'fx-rates.csv');
+  if (!existsSync(file) && existsSync(bundled)) {
+    mkdirSync(path.dirname(file), { recursive: true });
+    copyFileSync(bundled, file);
+  }
+  demoFxStore = new FxRateStore(file);
+  return demoFxStore;
 }
 
 async function wrap<T>(fn: () => Promise<T>): Promise<IpcResult<T>> {
@@ -104,23 +134,34 @@ function createWindow(): void {
 
 ipcMain.handle('key-status', (): KeyStatus => {
   const key = process.env.STRIPE_PASSKEY;
-  return { state: !key ? 'missing' : isRestrictedKey(key) ? 'ok' : 'invalid', configFile: configEnvFile() };
+  const state = demo ? 'demo' : !key ? 'missing' : isRestrictedKey(key) ? 'ok' : 'invalid';
+  return { state, configFile: configEnvFile() };
 });
 
-ipcMain.handle('save-key', (_event, raw: unknown) =>
-  wrap(async () => {
+/** After a key change, reload the window so no report from the previous key stays on screen. */
+const reloadSoon = (sender: Electron.WebContents) => setTimeout(() => sender.reload(), 0);
+
+ipcMain.handle('save-key', async (event, raw: unknown) => {
+  const res = await wrap(async () => {
     const key = typeof raw === 'string' ? raw.trim() : '';
+    if (isDemoKey(key)) {
+      demo = true; // not saved, not checked with Stripe; the saved real key stays as it is
+      return null;
+    }
     const client = createStripeClient(key); // throws unless it's a restricted rk_ key
     await checkKeyAccess(client);
     const file = await saveKey(key);
     process.env.STRIPE_PASSKEY = key;
     stripe = client;
+    demo = false;
     return file;
-  }),
-);
+  });
+  if (res.ok) reloadSoon(event.sender);
+  return res;
+});
 
 ipcMain.handle('revenue-by-country', (event, query: RevenueQuery) =>
-  wrap(() => revenueByCountry(getStripe(), getFxStore(), query ?? {}, (p) => event.sender.send('progress', p))),
+  wrap(() => revenueByCountry(getInvoices(), getFxStore(), query ?? {}, (p) => event.sender.send('progress', p))),
 );
 
 async function saveCsv(sender: Electron.WebContents, title: string, defaultPath: string, csv: () => string): Promise<string | null> {
@@ -137,19 +178,19 @@ ipcMain.handle('export-csv', (event, report: RevenueReport, view: ReportView) =>
     saveCsv(
       event.sender,
       'Export revenue by country',
-      `revenue-by-country${view === 'eur' ? '-eur' : ''}-${new Date().toISOString().slice(0, 10)}.csv`,
+      `${demo ? 'demo-' : ''}revenue-by-country${view === 'eur' ? '-eur' : ''}-${new Date().toISOString().slice(0, 10)}.csv`,
       () => reportToCsv(report, view),
     ),
   ),
 );
 
 ipcMain.handle('vat-report', (event, query: VatQuery) =>
-  wrap(() => vatReport(getStripe(), getFxStore(), query, (p) => event.sender.send('progress', p))),
+  wrap(() => vatReport(getInvoices(), getFxStore(), query, (p) => event.sender.send('progress', p))),
 );
 
 ipcMain.handle('export-vat-csv', (event, report: VatReport) =>
   wrap(() =>
-    saveCsv(event.sender, 'Export Cyprus VAT report', `cyprus-vat-${report.query.from}-to-${report.query.to}.csv`, () => vatReportToCsv(report)),
+    saveCsv(event.sender, 'Export Cyprus VAT report', `${demo ? 'demo-' : ''}cyprus-vat-${report.query.from}-to-${report.query.to}.csv`, () => vatReportToCsv(report)),
   ),
 );
 

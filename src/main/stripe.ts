@@ -29,15 +29,60 @@ export async function checkKeyAccess(stripe: Stripe): Promise<void> {
   }
 }
 
+/** The invoice fields the reports read. A Stripe invoice (with `customer` expanded) fits it. */
+export interface InvoiceLike {
+  id: string;
+  number: string | null;
+  status: string | null;
+  created: number;
+  effective_at: number | null;
+  status_transitions: { paid_at: number | null; finalized_at: number | null };
+  currency: string;
+  amount_paid: number;
+  total: number;
+  total_taxes: Array<{ amount: number; taxability_reason: string }> | null;
+  customer: string | CustomerLike | null;
+  customer_name: string | null;
+  customer_email: string | null;
+  customer_tax_ids?: Array<{ type: string; value: string | null }> | null;
+  customer_address: { country: string | null } | null;
+}
+
+export interface CustomerLike {
+  id: string;
+  deleted?: unknown;
+  name?: string | null;
+  email?: string | null;
+  address?: { country: string | null } | null;
+  shipping?: { address?: { country: string | null } } | null;
+}
+
+export interface InvoiceListParams {
+  status?: 'paid';
+  /** Unix seconds, inclusive. */
+  created: { gte?: number; lte: number };
+}
+
+/** Lists invoices newest first, like `stripe.invoices.list` with auto-pagination. */
+export type InvoiceSource = (params: InvoiceListParams) => AsyncIterable<InvoiceLike>;
+
+export const stripeInvoiceSource =
+  (stripe: Stripe): InvoiceSource =>
+  (params) =>
+    stripe.invoices.list({ ...params, limit: 100, expand: ['data.customer'] });
+
+const expandedCustomer = (c: InvoiceLike['customer']): CustomerLike | null =>
+  c && typeof c === 'object' && !c.deleted ? c : null;
+
 function dateToUnix(date: string, endOfDay: boolean): number {
   const ms = Date.parse(`${date}T${endOfDay ? '23:59:59' : '00:00:00'}Z`);
   if (Number.isNaN(ms)) throw new Error(`Invalid date: ${date}`);
   return Math.floor(ms / 1000);
 }
 
-function toFact(inv: Stripe.Invoice): InvoiceFact {
+function toFact(inv: InvoiceLike): InvoiceFact {
   const c = inv.customer;
-  const customer = c && typeof c === 'object' && !('deleted' in c && c.deleted) ? (c as Stripe.Customer) : null;
+  const customer = expandedCustomer(c);
   const customerId = typeof c === 'string' ? c : (c?.id ?? null);
   return {
     customerId,
@@ -56,7 +101,7 @@ function toFact(inv: Stripe.Invoice): InvoiceFact {
  * the ECB rate on its payment date, for cross-currency shares. Read-only: list endpoints only.
  */
 export async function revenueByCountry(
-  stripe: Stripe,
+  invoices: InvoiceSource,
   fx: FxRateStore,
   query: RevenueQuery,
   onProgress: (p: Progress) => void,
@@ -64,16 +109,11 @@ export async function revenueByCountry(
   // Reports cover complete past days only: always end at yesterday 23:59:59 UTC at the latest.
   const yesterday = isoDate(Date.now() - 86_400_000);
   const to = query.to && query.to < yesterday ? query.to : yesterday;
-  const created: Stripe.RangeQueryParam = { lte: dateToUnix(to, true) };
+  const created: InvoiceListParams['created'] = { lte: dateToUnix(to, true) };
   if (query.from) created.gte = dateToUnix(query.from, false);
 
   const facts: InvoiceFact[] = [];
-  const list = stripe.invoices.list({
-    status: 'paid',
-    limit: 100,
-    expand: ['data.customer'],
-    created,
-  });
+  const list = invoices({ status: 'paid', created });
 
   for await (const inv of list) {
     const fact = toFact(inv);
@@ -102,9 +142,9 @@ const FX_SOURCE_VAT = 'ECB reference rate on the invoice date (cached in data/fx
 /** Invoices are listed by `created`; look back this far for invoices finalized (or back-dated) into the period. */
 const VAT_CREATED_LOOKBACK_DAYS = 365;
 
-function toVatFact(inv: Stripe.Invoice): VatInvoiceFact {
+function toVatFact(inv: InvoiceLike): VatInvoiceFact {
   const c = inv.customer;
-  const customer = c && typeof c === 'object' && !('deleted' in c && c.deleted) ? (c as Stripe.Customer) : null;
+  const customer = expandedCustomer(c);
   const vatMinor = (inv.total_taxes ?? []).reduce((sum, t) => sum + t.amount, 0);
   const dateSec = inv.effective_at ?? inv.status_transitions?.finalized_at ?? inv.created;
   return {
@@ -131,7 +171,7 @@ function toVatFact(inv: Stripe.Invoice): VatInvoiceFact {
  * the invoice date. Read-only: list endpoints only.
  */
 export async function vatReport(
-  stripe: Stripe,
+  invoices: InvoiceSource,
   fx: FxRateStore,
   query: VatQuery,
   onProgress: (p: Progress) => void,
@@ -142,11 +182,7 @@ export async function vatReport(
   const period: VatQuery = { from: query.from, to: query.to < yesterday ? query.to : yesterday };
 
   const lookbackFrom = isoDate(Date.parse(`${period.from}T00:00:00Z`) - VAT_CREATED_LOOKBACK_DAYS * 86_400_000);
-  const list = stripe.invoices.list({
-    limit: 100,
-    expand: ['data.customer'],
-    created: { gte: dateToUnix(lookbackFrom, false), lte: dateToUnix(yesterday, true) },
-  });
+  const list = invoices({ created: { gte: dateToUnix(lookbackFrom, false), lte: dateToUnix(yesterday, true) } });
 
   let scanned = 0;
   const facts: VatInvoiceFact[] = [];

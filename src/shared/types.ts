@@ -165,16 +165,22 @@ export interface VatReport {
 }
 
 export interface KeyStatus {
-  /** missing: no key set; invalid: a key is set but it isn't a restricted (rk_) key. */
-  state: 'ok' | 'missing' | 'invalid';
+  /**
+   * missing: no key set; invalid: a key is set but it isn't a restricted (rk_) key;
+   * demo: the demo key was entered, reports show generated data.
+   */
+  state: 'ok' | 'missing' | 'invalid' | 'demo';
   /** The .env file a key entered in the app is saved to. */
   configFile: string;
 }
 
 export interface StripeAnalyticsApi {
   keyStatus(): Promise<KeyStatus>;
-  /** Checks the key against Stripe (read-only calls), then saves it. Returns the file it was saved to. */
-  saveKey(key: string): Promise<IpcResult<string>>;
+  /**
+   * Checks the key against Stripe (read-only calls), then saves it and reloads the window.
+   * Returns the file it was saved to, or null for the demo key (which is never saved).
+   */
+  saveKey(key: string): Promise<IpcResult<string | null>>;
   revenueByCountry(query: RevenueQuery): Promise<IpcResult<RevenueReport>>;
   exportCsv(report: RevenueReport, view: ReportView): Promise<IpcResult<string | null>>;
   vatReport(query: VatQuery): Promise<IpcResult<VatReport>>;

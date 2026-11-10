@@ -41,9 +41,18 @@ export async function initKeyDialog(api: StripeAnalyticsApi): Promise<void> {
     }
     input.value = '';
     dialog.close();
+    // The main process reloads the window next, so the new key's mode shows from a clean page.
   });
 
   const status = await api.keyStatus();
+  if (status.state === 'demo') showDemoMode();
   if (status.state === 'missing') await open('No Stripe key found. Enter one to load reports.');
   else if (status.state === 'invalid') await open('The configured Stripe key is not a restricted (rk_…) key. Enter a restricted key instead.');
+}
+
+/** Make demo mode impossible to miss: banner, window title and button labels. */
+function showDemoMode(): void {
+  $<HTMLElement>('#demo-banner').hidden = false;
+  document.title = `${document.title} — DEMO`;
+  for (const id of ['#load', '#vat-load']) $<HTMLButtonElement>(id).textContent = 'Load demo data';
 }

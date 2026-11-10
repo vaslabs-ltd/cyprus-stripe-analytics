@@ -104,6 +104,27 @@ Not included: credit notes/refunds and input VAT. Invoices are listed by creatio
 back 365 days before the quarter, to catch invoices finalized or back-dated into it.
 Export CSV writes one row per invoice.
 
+## Demo mode
+
+To try the app without a Stripe account, enter **`rk_demo`** as the key. The reports then show
+generated data instead of calling Stripe: made-up customers in Cyprus, the EU and elsewhere, paying
+in EUR, GBP and USD from January 2025 to yesterday. A few invoices are wrong on purpose so the VAT
+tab has something to flag. A given month always shows the same invoices.
+
+A banner, the window title and the **Load demo data** buttons show when it's on. Demo mode is
+never saved:
+
+- The demo key isn't written to the `.env` file and doesn't replace a saved key; restarting the
+  app goes back to the real key. A `STRIPE_PASSKEY=rk_demo` in a `.env` file or the environment is
+  ignored.
+- The generated invoices only exist in memory.
+- Exchange rates for demo reports use a separate cache, `demo/fx-rates.csv` in the cache folder
+  below (seeded from the bundled file), so they never mix with the real one.
+- CSV exports are named `demo-…csv` by default.
+
+Entering a real key leaves demo mode, and the window reloads so no report from the other mode stays
+on screen.
+
 ## Stripe key (read-only)
 
 Create a **restricted key** in the Stripe Dashboard → Developers → API keys, with **Read** access to:

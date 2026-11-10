@@ -116,6 +116,14 @@ tr.flagged td:first-child { box-shadow: inset 3px 0 var(--error); }
 details summary { cursor: pointer; color: var(--muted); font-size: 12px; margin: 8px 0; }
 
 .tabs .tabs-end { margin-left: auto; align-self: center; height: 28px; padding: 2px 10px; font-size: 12px; color: var(--muted); }
+.demo-banner {
+  margin: -8px 0 12px;
+  padding: 8px 12px;
+  border-radius: 6px;
+  background: #f5a62326;
+  border: 1px solid #f5a623;
+  font-size: 13px;
+}
 dialog {
   border: 1px solid var(--border);
   border-radius: 10px;
