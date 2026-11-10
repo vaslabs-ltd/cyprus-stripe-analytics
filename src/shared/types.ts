@@ -69,6 +69,37 @@ export interface RevenueReport {
 
 export interface Progress {
   invoicesScanned: number;
+  /** What is being fetched, sent once before the first page (VAT report). */
+  scope?: FetchScope;
+}
+
+/** Stripe invoice statuses. */
+export type InvoiceStatus = 'draft' | 'open' | 'paid' | 'uncollectible' | 'void';
+
+/**
+ * How the VAT report fetches invoices from Stripe. Stripe can only filter invoices by
+ * `created` and `status`, not by the invoice date (`effective_at`), so a wider search
+ * finds invoices finalized or back-dated into the period, at the cost of fetching more.
+ */
+export interface VatFetchSettings {
+  /** Statuses to fetch and include in the report (at least one). */
+  statuses: InvoiceStatus[];
+  /** Also fetch invoices created this many days before the period starts. */
+  lookbackDays: number;
+  /** Also fetch invoices created after the period ends, up to yesterday. */
+  includeCreatedAfter: boolean;
+}
+
+export interface Settings {
+  vatFetch: VatFetchSettings;
+}
+
+/** The `created` window and statuses one report fetched. */
+export interface FetchScope {
+  /** Inclusive, ISO dates (UTC). */
+  createdFrom: string;
+  createdTo: string;
+  statuses: InvoiceStatus[];
 }
 
 export type IpcResult<T> = { ok: true; value: T } | { ok: false; error: string };
@@ -92,7 +123,7 @@ export interface VatInvoice {
   date: string;
   /** YYYY-MM of `date`; VIES is reported per month. */
   month: string;
-  /** Stripe status: paid, open or uncollectible. */
+  /** Stripe status: paid, open or uncollectible (draft and void only when enabled in Options). */
   status: string;
   customerId: string | null;
   customerName: string | null;
@@ -159,8 +190,10 @@ export interface VatReport {
   /** Every month of the period, in order, including months without EU sales. */
   viesMonths: ViesMonth[];
   fxSource: string;
-  /** Invoices fetched from Stripe (including ones outside the period or not finalized). */
+  /** Invoices fetched from Stripe (including ones dated outside the period). */
   invoicesScanned: number;
+  /** What was fetched from Stripe. */
+  scope: FetchScope;
   generatedAt: string;
 }
 
@@ -186,4 +219,7 @@ export interface StripeAnalyticsApi {
   vatReport(query: VatQuery): Promise<IpcResult<VatReport>>;
   exportVatCsv(report: VatReport): Promise<IpcResult<string | null>>;
   onProgress(cb: (p: Progress) => void): () => void;
+  getSettings(): Promise<IpcResult<{ settings: Settings; file: string }>>;
+  /** Validates and saves; returns what was saved. */
+  saveSettings(settings: Settings): Promise<IpcResult<Settings>>;
 }

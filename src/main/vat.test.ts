@@ -1,5 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import type { InvoiceStatus } from '../shared/types';
 import { buildVatReport, monthsBetween, resolveVatCountry, vatReportToCsv, vatSection, type VatInvoiceFact } from './vat';
 
 const fact = (f: Partial<VatInvoiceFact>): VatInvoiceFact => ({
@@ -19,7 +20,8 @@ const fact = (f: Partial<VatInvoiceFact>): VatInvoiceFact => ({
 
 // 1 EUR = 0.8 GBP
 const rate = (cur: string) => (cur === 'gbp' ? 0.8 : 1);
-const meta = { fxSource: 'test', invoicesScanned: 99 };
+const scope = { createdFrom: '2025-01-01', createdTo: '2026-12-31', statuses: ['paid', 'open', 'uncollectible'] as InvoiceStatus[] };
+const meta = { fxSource: 'test', invoicesScanned: 99, scope };
 
 test('sections: Cyprus, other EU (VIES), everything else international', () => {
   assert.equal(vatSection('CY'), 'cy');

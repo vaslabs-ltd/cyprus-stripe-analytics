@@ -1,4 +1,4 @@
-import type { StripeAnalyticsApi, VatInvoice, VatReport, ViesMonth } from '../shared/types';
+import type { FetchScope, StripeAnalyticsApi, VatInvoice, VatReport, ViesMonth } from '../shared/types';
 import { $, countryCell, el, formatEurCents, formatMoney, plural, setStatus as setStatusOn, yesterdayUtc } from './ui.js';
 
 /**
@@ -45,7 +45,14 @@ function vatQuarters(scheme: Scheme, today: string, count: number): Period[] {
   return out.filter((p) => p.from <= yesterdayUtc);
 }
 
-const STATUS_LABEL: Record<string, string> = { paid: 'Paid', open: 'Unpaid', uncollectible: 'Uncollectible' };
+const STATUS_LABEL: Record<string, string> = { paid: 'Paid', open: 'Unpaid', uncollectible: 'Uncollectible', draft: 'Draft', void: 'Void' };
+
+/** e.g. "paid, open or uncollectible invoices created 2025-03-01 to 2025-05-31" */
+const excludedStatuses = (s: FetchScope) =>
+  (['uncollectible', 'open', 'paid', 'void', 'draft'] as const).filter((x) => !s.statuses.includes(x)).map((x) => `${STATUS_LABEL[x].toLowerCase()} invoices`);
+
+const describeScope = (s: FetchScope) =>
+  `${s.statuses.length === 5 ? 'all' : s.statuses.join(', ').replace(/, ([^,]*)$/, ' or $1')} invoices created ${s.createdFrom} to ${s.createdTo}`;
 
 /** Stripe taxability reasons, in words. Unlisted reasons are shown as-is. */
 const TAX_REASON_LABEL: Record<string, string> = {
@@ -97,8 +104,12 @@ export function initVatTab(api: StripeAnalyticsApi): void {
   populatePeriods();
   schemeSelect.addEventListener('change', populatePeriods);
 
+  // The scope arrives with the first progress event, so the count reads as "of what".
+  let scope: FetchScope | null = null;
   api.onProgress((p) => {
-    if (loading) setStatus(`Fetching… ${p.invoicesScanned} invoices`);
+    if (!loading) return;
+    if (p.scope) scope = p.scope;
+    setStatus(scope ? `Fetching ${describeScope(scope)}… ${p.invoicesScanned} so far` : `Fetching… ${p.invoicesScanned} invoices`);
   });
 
   form.addEventListener('submit', async (e) => {
@@ -106,6 +117,7 @@ export function initVatTab(api: StripeAnalyticsApi): void {
     const [from, to] = periodSelect.value.split('|');
     loadBtn.disabled = exportBtn.disabled = true;
     loading = true;
+    scope = null;
     setStatus('Fetching…');
     const res = await api.vatReport({ from, to });
     loading = false;
@@ -137,11 +149,11 @@ export function initVatTab(api: StripeAnalyticsApi): void {
 
     const flagged = r.invoices.filter((i) => i.warnings.length).length;
     metaEl.textContent =
-      `${plural(r.invoices.length, 'finalized invoice')} dated ${r.query.from} to ${r.query.to} ` +
-      `(${r.invoicesScanned} scanned) at ${new Date(r.generatedAt).toLocaleString()}. ` +
+      `${plural(r.invoices.length, 'invoice')} dated ${r.query.from} to ${r.query.to} ` +
+      `at ${new Date(r.generatedAt).toLocaleString()}, from ${r.invoicesScanned} ${describeScope(r.scope)} (search period and statuses: Options tab). ` +
       (flagged ? `${plural(flagged, 'invoice')} flagged for review. ` : '') +
       `Country from the address on the invoice, else the customer's address. ` +
-      `EUR: ${r.fxSource}. Not included: credit notes and refunds, input VAT on purchases, void and draft invoices.`;
+      `EUR: ${r.fxSource}. Not included: ${['credit notes and refunds', 'input VAT on purchases', ...excludedStatuses(r.scope)].join(', ')}.`;
   }
 
   function card(k: string, v: string, n?: string, empty = false): HTMLElement {

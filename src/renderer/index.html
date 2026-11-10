@@ -14,6 +14,7 @@
     <nav class="tabs" role="tablist" aria-label="Reports">
       <button type="button" role="tab" id="tab-country" aria-controls="panel-country" aria-selected="true">Country Revenue</button>
       <button type="button" role="tab" id="tab-vat" aria-controls="panel-vat" aria-selected="false" tabindex="-1">Cyprus VAT</button>
+      <button type="button" role="tab" id="tab-options" aria-controls="panel-options" aria-selected="false" tabindex="-1">Options</button>
       <button type="button" id="key-open" class="tabs-end">Stripe key…</button>
     </nav>
 
@@ -135,6 +136,57 @@
       </div>
 
       <footer id="vat-meta"></footer>
+    </section>
+
+    <section id="panel-options" role="tabpanel" aria-labelledby="tab-options" hidden>
+      <header>
+        <h1>Options</h1>
+        <p class="sub">Saved to <code id="options-file"></code> and used the next time a report loads.</p>
+      </header>
+
+      <form id="options-form" class="options">
+        <h2>Cyprus VAT · invoices to fetch</h2>
+        <p class="hint">
+          Stripe can only search invoices by the date they were <em>created</em>, but the VAT report goes by the
+          <em>invoice date</em> (when it was finalized, or the date set on it). By default only invoices created within
+          the VAT period are fetched, which is fastest. A wider search also finds invoices finalized late or back-dated
+          into the period, but fetches more invoices and is slower.
+        </p>
+
+        <fieldset>
+          <legend>Search period</legend>
+          <label>Also fetch invoices created before the period
+            <select id="opt-lookback">
+              <option value="0">No, only from the start of the period (fastest)</option>
+              <option value="31">1 month before</option>
+              <option value="92">3 months before</option>
+              <option value="365">12 months before (slowest)</option>
+            </select>
+          </label>
+          <label class="check">
+            <input type="checkbox" id="opt-after" />
+            Also fetch invoices created after the period ends, up to yesterday (catches back-dated invoices)
+          </label>
+        </fieldset>
+
+        <fieldset id="opt-statuses">
+          <legend>Invoice statuses</legend>
+          <label class="check"><input type="checkbox" value="paid" /> Paid</label>
+          <label class="check"><input type="checkbox" value="open" /> Open (unpaid)</label>
+          <label class="check"><input type="checkbox" value="uncollectible" /> Uncollectible</label>
+          <label class="check"><input type="checkbox" value="draft" /> Draft</label>
+          <label class="check"><input type="checkbox" value="void" /> Void</label>
+          <p class="hint">
+            Paid, open and uncollectible are the finalized invoices that count for VAT. Draft and void invoices are not
+            VAT invoices: include them only to look for mistakes. They are flagged, but counted in the totals.
+          </p>
+        </fieldset>
+
+        <div class="options-actions">
+          <button type="button" id="opt-defaults">Reset to defaults</button>
+          <span id="options-status" class="status" role="status"></span>
+        </div>
+      </form>
     </section>
 
     <script type="module" src="renderer.js"></script>

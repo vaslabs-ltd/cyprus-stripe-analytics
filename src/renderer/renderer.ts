@@ -2,6 +2,7 @@ import type { CountryCurrencyRevenue, CountryTotal, ReportView, RevenueReport, S
 import { $, countryCell, countryName, el, formatMoney, pctFmt, plural, setStatus as setStatusOn, yesterdayUtc } from './ui.js';
 import { initKeyDialog } from './key.js';
 import { initVatTab } from './vat.js';
+import { initOptionsTab } from './options.js';
 
 declare global {
   interface Window {
@@ -32,6 +33,7 @@ $<HTMLElement>('[role="tablist"]').addEventListener('keydown', (e) => {
 });
 
 initVatTab(api);
+void initOptionsTab(api);
 void initKeyDialog(api);
 
 // ---- Country Revenue tab ----

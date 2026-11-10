@@ -1,8 +1,9 @@
 import Stripe from 'stripe';
-import type { Progress, RevenueQuery, RevenueReport, VatQuery, VatReport } from '../shared/types';
+import type { FetchScope, InvoiceStatus, Progress, RevenueQuery, RevenueReport, VatFetchSettings, VatQuery, VatReport } from '../shared/types';
 import { RevenueAggregator, toMajorUnits, type InvoiceFact } from './analytics';
 import { assertSupportedCurrency, BASE_CURRENCY, FX_SOURCE, isoDate, type FxRateStore } from './fx';
-import { buildVatReport, VAT_STATUSES, type VatInvoiceFact } from './vat';
+import { buildVatReport, type VatInvoiceFact } from './vat';
+import { DEFAULT_SETTINGS, INVOICE_STATUSES } from './settings';
 
 /**
  * Only restricted keys (rk_...) are accepted. A standard secret key (sk_...) has full
@@ -58,7 +59,7 @@ export interface CustomerLike {
 }
 
 export interface InvoiceListParams {
-  status?: 'paid';
+  status?: InvoiceStatus;
   /** Unix seconds, inclusive. */
   created: { gte?: number; lte: number };
 }
@@ -139,8 +140,28 @@ export async function revenueByCountry(
 
 const FX_SOURCE_VAT = 'ECB reference rate on the invoice date (cached in data/fx-rates.csv, gaps from api.frankfurter.dev)';
 
-/** Invoices are listed by `created`; look back this far for invoices finalized (or back-dated) into the period. */
-const VAT_CREATED_LOOKBACK_DAYS = 365;
+/**
+ * Which invoices to fetch for a VAT period. Stripe filters by `created`, not by the invoice date,
+ * so the window can reach back before the period (invoices finalized late) and on to yesterday
+ * (invoices back-dated into the period); see VatFetchSettings.
+ */
+export function vatFetchScope(period: VatQuery, fetch: VatFetchSettings, yesterday: string): FetchScope {
+  return {
+    createdFrom: isoDate(Date.parse(`${period.from}T00:00:00Z`) - fetch.lookbackDays * 86_400_000),
+    createdTo: fetch.includeCreatedAfter ? yesterday : period.to,
+    statuses: INVOICE_STATUSES.filter((s) => fetch.statuses.includes(s)),
+  };
+}
+
+/** One list per status (Stripe takes a single status), or one unfiltered list when all are wanted. */
+async function* listScope(invoices: InvoiceSource, scope: FetchScope): AsyncIterable<InvoiceLike> {
+  const created = { gte: dateToUnix(scope.createdFrom, false), lte: dateToUnix(scope.createdTo, true) };
+  if (scope.statuses.length === INVOICE_STATUSES.length) {
+    yield* invoices({ created });
+    return;
+  }
+  for (const status of scope.statuses) yield* invoices({ status, created });
+}
 
 function toVatFact(inv: InvoiceLike): VatInvoiceFact {
   const c = inv.customer;
@@ -166,29 +187,31 @@ function toVatFact(inv: InvoiceLike): VatInvoiceFact {
 }
 
 /**
- * Cyprus VAT report: finalized invoices (paid, open, uncollectible) whose invoice date falls in
- * the period, split into Cyprus VAT / VIES / international, converted to EUR at the ECB rate on
- * the invoice date. Read-only: list endpoints only.
+ * Cyprus VAT report: invoices with the chosen statuses (by default the finalized ones: paid, open,
+ * uncollectible) whose invoice date falls in the period, split into Cyprus VAT / VIES /
+ * international, converted to EUR at the ECB rate on the invoice date. Read-only: list endpoints only.
  */
 export async function vatReport(
   invoices: InvoiceSource,
   fx: FxRateStore,
   query: VatQuery,
   onProgress: (p: Progress) => void,
+  fetch: VatFetchSettings = DEFAULT_SETTINGS.vatFetch,
 ): Promise<VatReport> {
   if (!query.from || !query.to || query.from > query.to) throw new Error('Pick a VAT period.');
   const yesterday = isoDate(Date.now() - 86_400_000);
   if (query.from > yesterday) throw new Error('The VAT period has not started yet.');
   const period: VatQuery = { from: query.from, to: query.to < yesterday ? query.to : yesterday };
+  const scope = vatFetchScope(period, fetch, yesterday);
+  if (!scope.statuses.length) throw new Error('No invoice statuses selected in Options.');
+  const wanted = new Set<string>(scope.statuses);
 
-  const lookbackFrom = isoDate(Date.parse(`${period.from}T00:00:00Z`) - VAT_CREATED_LOOKBACK_DAYS * 86_400_000);
-  const list = invoices({ created: { gte: dateToUnix(lookbackFrom, false), lte: dateToUnix(yesterday, true) } });
-
+  onProgress({ invoicesScanned: 0, scope });
   let scanned = 0;
   const facts: VatInvoiceFact[] = [];
-  for await (const inv of list) {
+  for await (const inv of listScope(invoices, scope)) {
     if (++scanned % 100 === 0) onProgress({ invoicesScanned: scanned });
-    if (!inv.status || !VAT_STATUSES.has(inv.status)) continue;
+    if (!wanted.has(inv.status ?? 'draft')) continue;
     const fact = toVatFact(inv);
     if (fact.date < period.from || fact.date > period.to) continue;
     assertSupportedCurrency(fact.currency);
@@ -200,5 +223,5 @@ export async function vatReport(
     facts.map((f) => f.currency),
     facts.map((f) => f.date),
   );
-  return buildVatReport(facts, (cur, date) => fx.rate(cur, date), period, { fxSource: FX_SOURCE_VAT, invoicesScanned: scanned });
+  return buildVatReport(facts, (cur, date) => fx.rate(cur, date), period, { fxSource: FX_SOURCE_VAT, invoicesScanned: scanned, scope });
 }

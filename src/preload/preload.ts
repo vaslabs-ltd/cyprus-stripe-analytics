@@ -8,6 +8,8 @@ const api: StripeAnalyticsApi = {
   exportCsv: (report, view) => ipcRenderer.invoke('export-csv', report, view),
   vatReport: (query) => ipcRenderer.invoke('vat-report', query),
   exportVatCsv: (report) => ipcRenderer.invoke('export-vat-csv', report),
+  getSettings: () => ipcRenderer.invoke('get-settings'),
+  saveSettings: (settings) => ipcRenderer.invoke('save-settings', settings),
   onProgress: (cb) => {
     const listener = (_e: IpcRendererEvent, p: Progress) => cb(p);
     ipcRenderer.on('progress', listener);

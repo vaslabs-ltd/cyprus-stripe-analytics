@@ -1,4 +1,4 @@
-import type { VatInvoice, VatQuery, VatReport, VatSection, VatSectionSummary, ViesLine, ViesMonth } from '../shared/types';
+import type { FetchScope, VatInvoice, VatQuery, VatReport, VatSection, VatSectionSummary, ViesLine, ViesMonth } from '../shared/types';
 import { minorUnitExponent, toMajorUnits, UNKNOWN_COUNTRY } from './analytics';
 
 /** The company's VAT registration country. */
@@ -20,8 +20,11 @@ export const NO_VAT_REASONS = new Set([
   'not_subject_to_tax', 'excluded_territory', 'proportionally_rated', 'portion_product_exempt',
 ]);
 
-/** Invoice statuses that count for VAT: finalized and not voided. */
-export const VAT_STATUSES = new Set(['open', 'paid', 'uncollectible']);
+/** Warnings for statuses that aren't valid VAT invoices; they're only fetched when enabled in Options. */
+const STATUS_WARNING: Record<string, string> = {
+  draft: 'Draft: not finalized, not a VAT invoice yet',
+  void: 'Void: cancelled, does not count for VAT',
+};
 
 /** Minimal invoice data the VAT report needs (decoupled from the Stripe SDK). */
 export interface VatInvoiceFact {
@@ -81,8 +84,8 @@ export function monthsBetween(from: string, to: string): string[] {
   return months;
 }
 
-function warningsFor(section: VatSection, country: string, vatMinor: number, vatNumber: string | null, taxReasons: string[]): string[] {
-  const w: string[] = [];
+function warningsFor(status: string, section: VatSection, country: string, vatMinor: number, vatNumber: string | null, taxReasons: string[]): string[] {
+  const w: string[] = STATUS_WARNING[status] ? [STATUS_WARNING[status]] : [];
   if (country === UNKNOWN_COUNTRY) w.push('Customer country unknown');
   if (section === 'cy' && vatMinor === 0 && !taxReasons.some((r) => NO_VAT_REASONS.has(r))) {
     w.push('No VAT charged and no exemption or 0% rate recorded');
@@ -121,11 +124,12 @@ export function buildVatReport(
   facts: VatInvoiceFact[],
   eurRate: (currency: string, date: string) => number,
   query: VatQuery,
-  meta: { fxSource: string; invoicesScanned: number },
+  meta: { fxSource: string; invoicesScanned: number; scope: FetchScope },
 ): VatReport {
+  const statuses = new Set<string>(meta.scope.statuses);
   const invoices: VatInvoice[] = [];
   for (const f of facts) {
-    if (!VAT_STATUSES.has(f.status) || f.date < query.from || f.date > query.to) continue;
+    if (!statuses.has(f.status) || f.date < query.from || f.date > query.to) continue;
     const currency = f.currency.toLowerCase();
     const country = resolveVatCountry(f);
     const section = vatSection(country);
@@ -152,7 +156,7 @@ export function buildVatReport(
       netEurCents,
       vatEurCents,
       grossEurCents: netEurCents + vatEurCents,
-      warnings: warningsFor(section, country, f.vatMinor, vatNumber, f.taxReasons),
+      warnings: warningsFor(f.status, section, country, f.vatMinor, vatNumber, f.taxReasons),
     });
   }
   invoices.sort((a, b) => a.date.localeCompare(b.date) || (a.number ?? a.id).localeCompare(b.number ?? b.id));
@@ -200,6 +204,7 @@ export function buildVatReport(
     viesMonths,
     fxSource: meta.fxSource,
     invoicesScanned: meta.invoicesScanned,
+    scope: meta.scope,
     generatedAt: new Date().toISOString(),
   };
 }

@@ -11,6 +11,7 @@ import { vatReportToCsv } from './vat';
 import { reportToCsv } from './analytics';
 import { FxRateStore } from './fx';
 import { APP_DIR, cacheDir } from './paths';
+import { loadSettings, saveSettings } from './settings';
 
 /**
  * The app's config dir: ~/.config/vaslabs-ltd/stripe-analytics on Linux,
@@ -20,6 +21,8 @@ function configDir(): string {
   return path.join(app.getPath('appData'), APP_DIR);
 }
 const configEnvFile = () => path.join(configDir(), '.env');
+/** User preferences (Options tab), e.g. ~/.config/vaslabs-ltd/stripe-analytics/settings.json. */
+const settingsFile = () => path.join(configDir(), 'settings.json');
 
 /**
  * Load .env from the first location that exists:
@@ -185,8 +188,14 @@ ipcMain.handle('export-csv', (event, report: RevenueReport, view: ReportView) =>
 );
 
 ipcMain.handle('vat-report', (event, query: VatQuery) =>
-  wrap(() => vatReport(getInvoices(), getFxStore(), query, (p) => event.sender.send('progress', p))),
+  wrap(async () => {
+    const { vatFetch } = await loadSettings(settingsFile());
+    return vatReport(getInvoices(), getFxStore(), query, (p) => event.sender.send('progress', p), vatFetch);
+  }),
 );
+
+ipcMain.handle('get-settings', () => wrap(async () => ({ settings: await loadSettings(settingsFile()), file: settingsFile() })));
+ipcMain.handle('save-settings', (_event, raw: unknown) => wrap(() => saveSettings(settingsFile(), raw)));
 
 ipcMain.handle('export-vat-csv', (event, report: VatReport) =>
   wrap(() =>
