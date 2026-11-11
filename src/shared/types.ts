@@ -59,14 +59,23 @@ export interface ServiceCountryRevenue {
 }
 
 /**
- * Revenue for one service: a Stripe product, or for invoice lines without a product, the line
- * description. Each paid invoice is split across its lines in proportion to their net amounts.
+ * Revenue for one service: a Stripe tax code (the product's, else the account default). Each paid
+ * invoice is split across its lines in proportion to their net amounts.
  */
 export interface ServiceTotal {
-  /** Stable key: the product ID, or `desc:<description>` for lines without a product. */
+  /** The tax code ID (txcd_…), or 'none', 'unknown' or 'unsplit'. */
   key: string;
-  /** Product name (or the line description, or the product ID if products can't be read). */
+  /** Tax code name, e.g. "General - Services" (the ID if the name can't be read). */
   name: string;
+  /** Products (or line descriptions) billed under this tax code, sorted. */
+  items: string[];
+  /**
+   * Totals in each invoice currency. Each invoice's amount is split across its tax codes in whole
+   * minor units, so these add up exactly to the per-currency totals.
+   */
+  byCurrency: Array<{ currency: string; exponent: number; amountMinor: number; baseAmount: number; invoiceCount: number; customerCount: number }>;
+  /** One row per country and invoice currency (by currency, then largest first). */
+  rows: CountryCurrencyRevenue[];
   /** Major units of the base currency. */
   baseAmount: number;
   /** Fraction (0..1) of all revenue, measured in the base currency. */
@@ -78,7 +87,8 @@ export interface ServiceTotal {
   countries: ServiceCountryRevenue[];
 }
 
-export type ReportView = 'currency' | 'eur' | 'service';
+/** currency/eur: by country, in invoice currencies or converted; service/service-eur: by tax code. */
+export type ReportView = 'currency' | 'eur' | 'service' | 'service-eur';
 
 export interface RevenueReport {
   rows: CountryCurrencyRevenue[];
@@ -87,7 +97,7 @@ export interface RevenueReport {
   countries: CountryTotal[];
   /** One row per service (largest first), each split by country. */
   services: ServiceTotal[];
-  /** Set when product names couldn't be read, e.g. the key has no access to Products. */
+  /** Set when tax codes couldn't all be read, e.g. the key has no access to Products. */
   servicesNote?: string;
   /** Lower-case currency code all amounts are converted to for comparison. */
   baseCurrency: string;

@@ -196,8 +196,8 @@ ipcMain.handle('export-csv', (event, report: RevenueReport, view: ReportView) =>
   wrap(() =>
     saveCsv(
       event.sender,
-      view === 'service' ? 'Export revenue by service' : 'Export revenue by country',
-      `${demo ? 'demo-' : ''}${view === 'service' ? 'revenue-by-service' : 'revenue-by-country'}${view === 'eur' ? '-eur' : ''}-${new Date().toISOString().slice(0, 10)}.csv`,
+      view.startsWith('service') ? 'Export revenue by service' : 'Export revenue by country',
+      `${demo ? 'demo-' : ''}${view.startsWith('service') ? 'revenue-by-service' : 'revenue-by-country'}${view.endsWith('eur') ? '-eur' : ''}-${new Date().toISOString().slice(0, 10)}.csv`,
       () => reportToCsv(report, view),
     ),
   ),

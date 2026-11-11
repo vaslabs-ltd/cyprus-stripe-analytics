@@ -1,6 +1,6 @@
 import Stripe from 'stripe';
 import type { FetchScope, InvoiceStatus, Progress, RevenueQuery, RevenueReport, VatFetchSettings, VatQuery, VatReport } from '../shared/types';
-import { RevenueAggregator, toMajorUnits, type InvoiceFact, type LineFact } from './analytics';
+import { NO_TAX_CODE, RevenueAggregator, toMajorUnits, UNKNOWN_TAX_CODE, type Classify, type InvoiceFact, type LineFact } from './analytics';
 import { assertSupportedCurrency, BASE_CURRENCY, FX_SOURCE, isoDate, type FxRateStore } from './fx';
 import { buildVatReport, type VatInvoiceFact } from './vat';
 import { DEFAULT_SETTINGS, INVOICE_STATUSES } from './settings';
@@ -62,19 +62,30 @@ export interface LineItemLike {
 export interface ProductLike {
   id: string;
   name: string;
+  tax_code?: string | { id: string } | null;
 }
 
-/** Line items and products, for splitting revenue by service. */
+/**
+ * Line items, products and tax codes, for splitting revenue by service. Stripe keeps the tax code
+ * on the product (invoice lines don't carry one); lines whose product has none are taxed with the
+ * account's default tax code (Tax settings).
+ */
 export interface ServiceSource {
   /** All line items of one invoice, for invoices whose embedded list was cut short. */
   lineItems(invoiceId: string): AsyncIterable<LineItemLike>;
   /** All products, active and archived. */
   products(): AsyncIterable<ProductLike>;
+  /** The account's default tax code (Tax settings), or null when none is set. */
+  defaultTaxCode(): Promise<string | null>;
+  /** A tax code's name, e.g. "General - Services". */
+  taxCodeName(id: string): Promise<string>;
 }
 
 export const stripeServiceSource = (stripe: Stripe): ServiceSource => ({
   lineItems: (id) => stripe.invoices.listLineItems(id, { limit: 100 }),
   products: () => stripe.products.list({ limit: 100 }),
+  defaultTaxCode: async () => (await stripe.tax.settings.retrieve()).defaults.tax_code,
+  taxCodeName: async (id) => (await stripe.taxCodes.retrieve(id)).name,
 });
 
 export interface CustomerLike {
@@ -122,20 +133,61 @@ async function invoiceLines(inv: InvoiceLike, services: ServiceSource): Promise<
   return all;
 }
 
+const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e));
+
 /**
- * Product names by ID. A key without read access to Products still gets the report: services are
- * then shown by product ID, with a note saying why.
+ * Works out each line's tax code: the product's, else the account default. Whatever can't be read
+ * (the key has no access to Products or Tax settings) is reported as unknown, with a note saying
+ * which permission is missing; the report itself still loads.
  */
-async function productNames(services: ServiceSource, wanted: Set<string>): Promise<{ names: Map<string, string>; note?: string }> {
-  const names = new Map<string, string>();
-  if (!wanted.size) return { names };
-  try {
-    for await (const p of services.products()) names.set(p.id, p.name);
-    return { names };
-  } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e);
-    return { names, note: `Services are shown by product ID: product names could not be read (${msg}). Give the key Read access to Products to see names.` };
+async function taxCodeClassifier(services: ServiceSource, lines: LineFact[]): Promise<{ classify: Classify; notes: string[] }> {
+  const notes: string[] = [];
+  const products = new Map<string, { name: string; taxCode: string | null }>();
+  let productsOk = true;
+  if (lines.some((l) => l.product)) {
+    try {
+      for await (const p of services.products()) {
+        products.set(p.id, { name: p.name, taxCode: typeof p.tax_code === 'string' ? p.tax_code : (p.tax_code?.id ?? null) });
+      }
+    } catch (e) {
+      productsOk = false;
+      notes.push(`Products could not be read (${errorText(e)}): give the key Read access to Products to see tax codes.`);
+    }
   }
+  const productOf = (l: LineFact) => (l.product ? products.get(l.product) : undefined);
+
+  // The account default only matters for lines without a product tax code.
+  let fallback: string = NO_TAX_CODE;
+  if (lines.some((l) => !l.product || (productsOk && !productOf(l)?.taxCode))) {
+    try {
+      fallback = (await services.defaultTaxCode()) ?? NO_TAX_CODE;
+    } catch (e) {
+      fallback = UNKNOWN_TAX_CODE;
+      notes.push(`Tax settings could not be read (${errorText(e)}): lines without a product tax code are shown as unknown. Give the key Read access to Tax settings for the account's default tax code.`);
+    }
+  }
+
+  const classify: Classify = (l) => {
+    const p = productOf(l);
+    const item = p?.name ?? ((l.description ?? '').trim() || l.product || 'Line without a description');
+    if (!productsOk && l.product) return { service: UNKNOWN_TAX_CODE, item };
+    if (p?.taxCode) return { service: p.taxCode, item };
+    return { service: fallback, item: fallback.startsWith('txcd_') ? `${item} (account default)` : item };
+  };
+  return { classify, notes };
+}
+
+async function taxCodeNames(services: ServiceSource, ids: string[]): Promise<{ names: Map<string, string>; note?: string }> {
+  const names = new Map<string, string>();
+  let failed: string | undefined;
+  for (const id of ids) {
+    try {
+      names.set(id, await services.taxCodeName(id));
+    } catch (e) {
+      failed ??= errorText(e);
+    }
+  }
+  return { names, note: failed && `Some tax code names could not be read (${failed}); those show by ID.` };
 }
 
 function toFact(inv: InvoiceLike): InvoiceFact {
@@ -189,16 +241,21 @@ export async function revenueByCountry(
     facts.map((f) => f.paidDate),
   );
 
-  const agg = new RevenueAggregator(BASE_CURRENCY, FX_SOURCE);
+  const { classify, notes } = await taxCodeClassifier(
+    services,
+    facts.flatMap((f) => f.lines ?? []),
+  );
+  const agg = new RevenueAggregator(BASE_CURRENCY, FX_SOURCE, classify);
   for (const f of facts) {
     // An invoice created before the cut-off but paid today can't be converted yet: leave it out.
     if (f.paidDate > yesterday) continue;
     agg.add(f, toMajorUnits(f.amountPaid, f.currency) / fx.rate(f.currency, f.paidDate));
   }
-  const productIds = new Set(facts.flatMap((f) => (f.lines ?? []).flatMap((l) => (l.product ? [l.product] : []))));
-  const { names, note } = await productNames(services, productIds);
+  const codes = [...new Set(agg.serviceKeys())].filter((k) => k.startsWith('txcd_'));
+  const { names, note } = await taxCodeNames(services, codes);
+  if (note) notes.push(note);
   const report = agg.report(query, names);
-  if (note) report.servicesNote = note;
+  if (notes.length) report.servicesNote = notes.join(' ');
   return report;
 }
 
@@ -206,6 +263,8 @@ export async function revenueByCountry(
 const NO_SERVICES: ServiceSource = {
   lineItems: async function* () {},
   products: async function* () {},
+  defaultTaxCode: async () => null,
+  taxCodeName: async (id) => id,
 };
 
 const FX_SOURCE_VAT = 'ECB reference rate on the invoice date (cached in data/fx-rates.csv, gaps from api.frankfurter.dev)';

@@ -1,4 +1,4 @@
-import type { CountryCurrencyRevenue, CountryTotal, ReportView, RevenueReport, StripeAnalyticsApi } from '../shared/types';
+import type { CountryCurrencyRevenue, CountryTotal, ReportView, RevenueReport, ServiceTotal, StripeAnalyticsApi } from '../shared/types';
 import { $, countryCell, countryName, el, formatMoney, pctFmt, plural, setStatus as setStatusOn, yesterdayUtc } from './ui.js';
 import { initKeyDialog } from './key.js';
 import { initVatTab } from './vat.js';
@@ -58,12 +58,19 @@ const serviceViewBtn = $<HTMLButtonElement>('#service-view');
 const serviceTable = $<HTMLTableElement>('#service-table');
 const serviceTbody = serviceTable.querySelector('tbody')!;
 const serviceTfoot = serviceTable.querySelector('tfoot')!;
+const serviceCurTable = $<HTMLTableElement>('#service-cur-table');
+const serviceCurTbody = serviceCurTable.querySelector('tbody')!;
+const serviceCurTfoot = serviceCurTable.querySelector('tfoot')!;
 
 type SortKey = 'country' | 'currency' | 'amount' | 'base' | 'share' | 'invoices' | 'customers';
 let report: RevenueReport | null = null;
 let sortKey: SortKey = 'amount';
 let sortAsc = false;
-let view: ReportView = 'currency';
+// Two independent toggles: EUR (convert and sum, or keep invoice currencies) and Service (group by
+// tax code, or by country). Together they pick one of four views.
+let eurOn = false;
+let serviceOn = false;
+const currentView = (): ReportView => (serviceOn ? (eurOn ? 'service-eur' : 'service') : eurOn ? 'eur' : 'currency');
 
 type EurSortKey = 'country' | 'base' | 'share' | 'invoices' | 'customers' | 'currencies';
 let eurSortKey: EurSortKey = 'base';
@@ -125,7 +132,7 @@ function renderServiceTotals(r: RevenueReport): void {
     item.append(el('span', `swatch c${i % 4}`), document.createTextNode(`${s.name} ${pctFmt.format(s.share)}`));
     legend.append(item);
   });
-  mix.append(el('div', 'k', `Service mix · total ≈ ${formatBase(r, r.baseTotal)}`), bar, legend);
+  mix.append(el('div', 'k', `Service mix by tax code · total ≈ ${formatBase(r, r.baseTotal)}`), bar, legend);
   totalsEl.replaceChildren(mix);
 }
 
@@ -188,16 +195,83 @@ function renderEurTable(r: RevenueReport): void {
   markSorted(eurTable, eurSortKey, eurSortAsc);
 }
 
-/** Service view: one group per service (largest first), with its countries underneath. */
+function serviceNameCell(s: ServiceTotal): HTMLTableCellElement {
+  const name = el('td', undefined, s.name);
+  if (s.key.startsWith('txcd_') && s.name !== s.key) name.append(el('span', 'tag', s.key));
+  if (s.items.length) name.append(el('div', 'items', s.items.join(' · ')));
+  return name;
+}
+
+/** One line per currency in a cell, e.g. "€1,200.00" and "£6.67" stacked. */
+function moneyLinesCell(amounts: Array<{ amountMinor: number; currency: string; exponent: number }>): HTMLTableCellElement {
+  const td = el('td', 'num');
+  td.append(...amounts.map((a) => el('div', undefined, formatMoney(a.amountMinor, a.currency, a.exponent))));
+  return td;
+}
+
+/**
+ * Service view in invoice currencies: one group per tax code, with a row per country and currency.
+ * Amounts in different currencies are never added up; ≈ EUR is shown for comparison only.
+ */
+function renderServiceCurrencyTable(r: RevenueReport, currency: string): void {
+  const rows: HTMLTableRowElement[] = [];
+  let shown = 0;
+  for (const s of r.services) {
+    const totals = s.byCurrency.filter((t) => !currency || t.currency === currency);
+    if (!totals.length) continue;
+    shown++;
+    const head = el('tr', 'service');
+    head.append(
+      serviceNameCell(s),
+      el('td', undefined, totals.map((t) => t.currency.toUpperCase()).join(', ')),
+      moneyLinesCell(totals),
+      el('td', 'num muted', formatBase(r, totals.reduce((n, t) => n + t.baseAmount, 0))),
+      el('td', 'num', pctFmt.format(1)),
+      el('td', 'num', String(totals.reduce((n, t) => n + t.invoiceCount, 0))),
+      el('td', 'num', currency ? String(totals[0].customerCount) : String(s.customerCount)),
+    );
+    rows.push(head);
+    const totalOf = new Map(s.byCurrency.map((t) => [t.currency, t.amountMinor]));
+    for (const x of s.rows) {
+      if (currency && x.currency !== currency) continue;
+      const tr = el('tr', 'service-country');
+      const of = totalOf.get(x.currency) ?? 0;
+      tr.append(
+        countryCell(x.country),
+        el('td', undefined, x.currency.toUpperCase()),
+        el('td', 'num', formatMoney(x.amountMinor, x.currency, x.exponent)),
+        el('td', 'num muted', formatBase(r, x.baseAmount)),
+        shareCell(of ? x.amountMinor / of : 0),
+        el('td', 'num', String(x.invoiceCount)),
+        el('td', 'num', String(x.customerCount)),
+      );
+      rows.push(tr);
+    }
+  }
+  serviceCurTbody.replaceChildren(...rows);
+
+  const totals = r.totalsByCurrency.filter((t) => !currency || t.currency === currency);
+  const foot = el('tr');
+  foot.append(
+    el('td', undefined, `Total · ${plural(shown, 'tax code')}`),
+    el('td', undefined, totals.map((t) => t.currency.toUpperCase()).join(', ')),
+    moneyLinesCell(totals),
+    el('td', 'num muted', formatBase(r, totals.reduce((n, t) => n + t.baseAmount, 0))),
+    el('td'),
+    el('td', 'num', String(totals.reduce((n, t) => n + t.invoiceCount, 0))),
+    el('td'),
+  );
+  serviceCurTfoot.replaceChildren(foot);
+  serviceCurTable.querySelector<HTMLTableCellElement>('th:nth-child(4)')!.textContent = `≈ ${r.baseCurrency.toUpperCase()}`;
+}
+
+/** Service view in EUR: one group per tax code (largest first), with its countries underneath. */
 function renderServiceTable(r: RevenueReport): void {
   const rows: HTMLTableRowElement[] = [];
   for (const s of r.services) {
     const head = el('tr', 'service');
-    const name = el('td', undefined, s.name);
-    if (s.key.startsWith('prod_')) name.append(el('span', 'tag', s.key));
-    else name.append(el('span', 'tag', s.key === 'unsplit' ? 'no line items' : 'no product, by description'));
     head.append(
-      name,
+      serviceNameCell(s),
       el('td', 'num', formatBase(r, s.baseAmount)),
       shareCell(s.share),
       el('td', 'num', pctFmt.format(1)),
@@ -222,7 +296,7 @@ function renderServiceTable(r: RevenueReport): void {
 
   const foot = el('tr');
   foot.append(
-    el('td', undefined, `Total · ${plural(r.services.length, 'service')}`),
+    el('td', undefined, `Total · ${plural(r.services.length, 'tax code')}`),
     el('td', 'num', formatBase(r, r.baseTotal)),
     el('td', 'num', pctFmt.format(r.baseTotal > 0 ? 1 : 0)),
     el('td'),
@@ -236,19 +310,24 @@ function renderServiceTable(r: RevenueReport): void {
 
 function render(): void {
   if (!report) return;
-  eurViewBtn.setAttribute('aria-pressed', String(view === 'eur'));
-  serviceViewBtn.setAttribute('aria-pressed', String(view === 'service'));
-  // The currency filter only applies to the per-currency view.
-  currencySelect.disabled = view !== 'currency';
+  const view = currentView();
+  eurViewBtn.setAttribute('aria-pressed', String(eurOn));
+  serviceViewBtn.setAttribute('aria-pressed', String(serviceOn));
+  // The currency filter applies whenever amounts are in invoice currencies.
+  currencySelect.disabled = eurOn;
   table.hidden = view !== 'currency';
   eurTable.hidden = view !== 'eur';
-  serviceTable.hidden = view !== 'service';
+  serviceCurTable.hidden = view !== 'service';
+  serviceTable.hidden = view !== 'service-eur';
   if (view === 'eur') {
     renderEurTable(report);
     renderTotals(report, '');
-  } else if (view === 'service') {
+  } else if (view === 'service-eur') {
     renderServiceTable(report);
     renderServiceTotals(report);
+  } else if (view === 'service') {
+    renderServiceCurrencyTable(report, currencySelect.value);
+    renderTotals(report, currencySelect.value);
   } else renderTable();
 }
 
@@ -301,7 +380,7 @@ function renderMeta(r: RevenueReport): void {
     `Country from customer address: ${s.customerAddress}, invoice snapshot: ${s.invoiceSnapshot}, ` +
     `shipping: ${s.shipping}, unknown: ${s.unknown}. ` +
     `Conversion to ${r.baseCurrency.toUpperCase()}: ${r.fxSource}. ` +
-    `Services: each invoice is split across its line items' products by their net amounts.` +
+    `Services: each invoice is split across its line items by net amount, by the product's tax code (else the account default).` +
     (r.servicesNote ? ` ${r.servicesNote}` : '');
 }
 
@@ -405,15 +484,16 @@ form.addEventListener('submit', async (e) => {
   setStatus(`Loaded ${report.invoicesScanned} invoices`);
 });
 
-currencySelect.addEventListener('change', renderTable);
+currencySelect.addEventListener('change', render);
 
-// EUR and Service view toggle on and off; at most one is on, otherwise the per-currency view shows.
-for (const [btn, v] of [[eurViewBtn, 'eur'], [serviceViewBtn, 'service']] as const) {
-  btn.addEventListener('click', () => {
-    view = view === v ? 'currency' : v;
-    render();
-  });
-}
+eurViewBtn.addEventListener('click', () => {
+  eurOn = !eurOn;
+  render();
+});
+serviceViewBtn.addEventListener('click', () => {
+  serviceOn = !serviceOn;
+  render();
+});
 
 eurTable.querySelector('thead')!.addEventListener('click', (e) => {
   const th = (e.target as HTMLElement).closest<HTMLTableCellElement>('th[data-sort]');
@@ -441,7 +521,7 @@ table.querySelector('thead')!.addEventListener('click', (e) => {
 
 exportBtn.addEventListener('click', async () => {
   if (!report) return;
-  const res = await api.exportCsv(report, view);
+  const res = await api.exportCsv(report, currentView());
   if (!res.ok) setStatus(res.error, true);
   else if (res.value) setStatus(`Exported to ${res.value}`);
 });

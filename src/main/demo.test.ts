@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { DEMO_PRODUCTS, demoInvoiceSource, demoServiceSource, generateDemoInvoices, isDemoKey } from './demo';
+import { DEMO_TAX_CODES, demoInvoiceSource, demoServiceSource, generateDemoInvoices, isDemoKey } from './demo';
 import { FxRateStore, SUPPORTED_CURRENCIES, type FetchJson } from './fx';
 import { revenueByCountry, vatReport, type InvoiceLike } from './stripe';
 
@@ -78,14 +78,13 @@ test('demo data fills both reports, including rows the VAT tab flags', async () 
   assert.ok(rev.rows.length >= 5, `${rev.rows.length} country/currency rows`);
   assert.deepEqual([...new Set(rev.rows.map((r) => r.currency))].sort(), ['eur', 'gbp', 'usd']);
 
-  // Demo invoices embed their lines: without product names, services show by product ID.
-  assert.equal(rev.services[0].name, DEMO_PRODUCTS.platform.id);
+  // Without a service source (no products, no default) no line has a tax code.
+  assert.deepEqual(rev.services.map((s) => s.key), ['none']);
   const bySvc = await revenueByCountry(src, fxStore(), { from: '2025-07-01', to: '2025-09-30' }, progress, demoServiceSource());
-  assert.equal(bySvc.services[0].name, DEMO_PRODUCTS.platform.name);
-  assert.ok(bySvc.services[0].share > 0.8, `platform share ${bySvc.services[0].share}`);
-  const ids: string[] = Object.values(DEMO_PRODUCTS).map((p) => p.id);
-  assert.ok(bySvc.services.length >= 3);
-  for (const s of bySvc.services) assert.ok(ids.includes(s.key), s.key);
+  assert.deepEqual(bySvc.services.map((s) => s.name), Object.values(DEMO_TAX_CODES));
+  assert.ok(bySvc.services[0].share > 0.8, `SaaS share ${bySvc.services[0].share}`);
+  assert.ok(bySvc.services[1].items.includes('Private tutoring (account default)'), bySvc.services[1].items.join());
+  assert.equal(bySvc.servicesNote, undefined);
   const sum = bySvc.services.reduce((n, s) => n + s.baseAmount, 0);
   assert.ok(Math.abs(sum - bySvc.baseTotal) < 1e-6);
 

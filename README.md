@@ -11,7 +11,7 @@ Stripe, built this for two recurring filings:
 1. **Central Bank statistics.** Each calendar quarter, the Central Bank of Cyprus collects the
    Services Survey (QSRVS) through its EDX e-business platform. The **Country Revenue** tab gives
    the revenue side of it, paid invoice totals per customer country and currency for the
-   quarter, with a EUR view, a currency mix and a service view (revenue per Stripe product, by
+   quarter, with a EUR view, a currency mix and a service view (revenue per Stripe tax code, by
    country), since the survey asks for each type of service separately.
 2. **VAT and VIES returns.** The **Cyprus VAT** tab splits a VAT quarter's invoices into domestic
    (output VAT owed), EU B2B (the monthly VIES listing, per customer VAT number) and
@@ -86,21 +86,32 @@ Only **EUR, GBP and USD** are supported; an invoice in any other currency stops 
 The **EUR view** button switches the table to one row per country, with every currency converted
 to EUR and summed (≈ EUR, % of total, invoices, distinct customers, currencies paid in).
 Export CSV exports whichever view is showing. The currency filter doesn't apply in this view.
+EUR view and Service view are separate toggles and can be combined (see below).
 
 ### Service view
 
 ![The service view: service mix, each service split by country, and CSV export](docs/gifs/service-view.gif)
 
-The **Service view** button shows revenue per service, in EUR, with each service split by country
-(≈ EUR, % of total, % of the service, invoices, distinct customers). A service is a Stripe
-**product**; invoice lines without a product are grouped by their description. Each paid invoice is
-split across its line items in proportion to their net amounts (after discounts, before tax), so
-the services add up to the same total as the country views. An invoice with lines for two services
-counts once in each. Export CSV writes one row per service and country
-(`service,product_id,country,revenue_eur,share_of_service,share_of_total,invoices,customers`).
+The **Service view** button groups revenue by service, with each service split by country. On its
+own it keeps the **invoice currencies**: a row per country and currency, with revenue in that
+currency, ≈ EUR for comparison, % of the service's total in that currency, invoices and customers;
+the currency filter applies. Turn on **EUR view** as well to convert everything to EUR and get one
+row per country under each service (≈ EUR, % of total, % of the service). A service is a Stripe
+**tax code** (e.g. "Software as a service (SaaS) - business use", "General - Services"): the tax
+code set on the product, else the account's default tax code from Tax settings. Each group lists
+the products billed under it, marked "(account default)" when the code came from the default.
+Each paid invoice is split across its line items in proportion to their net amounts (after
+discounts, before tax), in whole cents, so the services add up exactly to the same totals as the
+country views, per currency. An invoice with lines under two tax codes counts once in each.
+Export CSV writes the view that's showing: one row per tax code, country and currency
+(`service,tax_code,country,currency,revenue,revenue_minor_units,revenue_eur,invoices,customers`),
+or with EUR view on, one row per tax code and country
+(`service,tax_code,country,revenue_eur,share_of_service,share_of_total,invoices,customers`).
 
-Product names need **Read** access to Products on the key. Without it the report still loads, with
-services shown by product ID and a note under the table.
+Stripe keeps tax codes on products, not on invoices, so this view needs **Read** access to
+**Products** and **Tax settings** on the key. Without them the report still loads, with the
+codes it couldn't read shown as "Tax code unknown" and a note under the table saying which
+permission is missing.
 
 ### Currency mix
 To compare currencies, each invoice is converted to **EUR** at the ECB reference rate on its
@@ -179,7 +190,7 @@ report's footer says which window and statuses it searched.
 Create a **restricted key** in the Stripe Dashboard → Developers → API keys, with **Read** access to:
 - Invoices
 - Customers
-- Products (optional: names in the service view; without it services show by product ID)
+- Products and Tax settings (optional: tax codes for the service view)
 
 The app won't start a query with a standard `sk_` secret key; it accepts only `rk_` restricted keys.
 

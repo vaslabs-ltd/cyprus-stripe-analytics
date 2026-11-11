@@ -1,6 +1,17 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { RevenueAggregator, reportToCsv, resolveCountry, serviceFractions, UNKNOWN_COUNTRY, UNSPLIT_SERVICE, type InvoiceFact } from './analytics';
+import {
+  NO_TAX_CODE,
+  RevenueAggregator,
+  reportToCsv,
+  resolveCountry,
+  serviceFractions,
+  splitMinor,
+  UNKNOWN_COUNTRY,
+  UNSPLIT_SERVICE,
+  type Classify,
+  type InvoiceFact,
+} from './analytics';
 
 const fact = (f: Partial<InvoiceFact>): InvoiceFact => ({ customerId: 'c', currency: 'gbp', amountPaid: 1, paidDate: '2026-01-01', ...f });
 
@@ -65,38 +76,55 @@ test('aggregates per country and currency, with base-currency shares', () => {
   assert.equal(csv[3], 'GB,GBP,15.00,1500,18.00,2,1');
 });
 
-test('service fractions: by net line amount per product, falling back to the description', () => {
-  const f = serviceFractions([
-    { product: 'prod_a', description: 'A', amount: 600 },
-    { product: 'prod_b', description: 'B', amount: 300 },
-    { product: 'prod_a', description: 'A again', amount: 300 },
-    { product: null, description: ' Training ', amount: 300 },
-  ]);
-  assert.deepEqual([...f], [['prod_a', 0.6], ['prod_b', 0.2], ['desc:Training', 0.2]]);
-  assert.deepEqual([...serviceFractions(undefined)], [[UNSPLIT_SERVICE, 1]]);
-  assert.deepEqual([...serviceFractions([{ product: 'prod_a', description: null, amount: 0 }])], [[UNSPLIT_SERVICE, 1]]);
+// Tax code per product, as the Stripe side works it out; lines without a product get 'none'.
+const codes: Record<string, string> = { prod_dev: 'txcd_it', prod_host: 'txcd_it', prod_ads: 'txcd_mkt' };
+const byCode: Classify = (l) => ({ service: (l.product && codes[l.product]) || NO_TAX_CODE, item: l.description ?? '?' });
+
+test('service fractions: by net line amount per tax code; products with the same code add up', () => {
+  const f = serviceFractions(
+    [
+      { product: 'prod_dev', description: 'Development', amount: 600 },
+      { product: 'prod_host', description: 'Hosting', amount: 200 },
+      { product: 'prod_ads', description: 'Ads', amount: 100 },
+      { product: null, description: 'Ad-hoc', amount: 100 },
+    ],
+    byCode,
+  );
+  assert.deepEqual(
+    [...f].map(([k, v]) => [k, v.fraction, [...v.items]]),
+    [
+      ['txcd_it', 0.8, ['Development', 'Hosting']],
+      ['txcd_mkt', 0.1, ['Ads']],
+      [NO_TAX_CODE, 0.1, ['Ad-hoc']],
+    ],
+  );
+  assert.deepEqual([...serviceFractions(undefined, byCode).keys()], [UNSPLIT_SERVICE]);
+  assert.deepEqual([...serviceFractions([{ product: 'prod_dev', description: null, amount: 0 }], byCode).keys()], [UNSPLIT_SERVICE]);
   // A credit line reduces its service; the fractions still add up to 1.
-  const credit = serviceFractions([
-    { product: 'prod_a', description: null, amount: 1000 },
-    { product: 'prod_b', description: null, amount: -200 },
-  ]);
-  assert.deepEqual([...credit], [['prod_a', 1.25], ['prod_b', -0.25]]);
+  const credit = serviceFractions(
+    [
+      { product: 'prod_dev', description: null, amount: 1000 },
+      { product: 'prod_ads', description: null, amount: -200 },
+    ],
+    byCode,
+  );
+  assert.deepEqual([...credit].map(([k, v]) => [k, v.fraction]), [['txcd_it', 1.25], ['txcd_mkt', -0.25]]);
 });
 
-test('service view: invoices split across products, then by country, with CSV', () => {
-  const agg = new RevenueAggregator('eur', 'test');
+test('service view: invoices split across tax codes, then by country, with CSV', () => {
+  const agg = new RevenueAggregator('eur', 'test', byCode);
   const dev = { product: 'prod_dev', description: 'Development', amount: 900 };
-  const train = { product: null, description: 'Training, on site', amount: 100 };
-  agg.add(fact({ customerId: 'a', customerCountry: 'GB', lines: [dev, train] }), 1000);
+  const ads = { product: 'prod_ads', description: 'Ads, social', amount: 100 };
+  agg.add(fact({ customerId: 'a', customerCountry: 'GB', lines: [dev, ads] }), 1000);
   agg.add(fact({ customerId: 'b', customerCountry: 'CY', lines: [dev] }), 500);
-  agg.add(fact({ customerId: 'c', customerCountry: 'CY', lines: [{ ...dev, amount: 50 }] }), 50);
-  const r = agg.report({}, new Map([['prod_dev', 'Software development']]));
+  agg.add(fact({ customerId: 'c', customerCountry: 'CY', lines: [{ product: 'prod_host', description: 'Hosting', amount: 50 }] }), 50);
+  const r = agg.report({}, new Map([['txcd_mkt', 'Marketing, advertising']]));
 
   assert.deepEqual(
-    r.services.map((s) => [s.key, s.name, s.baseAmount, s.invoiceCount, s.customerCount]),
+    r.services.map((s) => [s.key, s.name, s.items, s.baseAmount, s.invoiceCount, s.customerCount]),
     [
-      ['prod_dev', 'Software development', 1450, 3, 3],
-      ['desc:Training, on site', 'Training, on site', 100, 1, 1],
+      ['txcd_it', 'txcd_it', ['Development', 'Hosting'], 1450, 3, 3],
+      ['txcd_mkt', 'Marketing, advertising', ['Ads, social'], 100, 1, 1],
     ],
   );
   assert.deepEqual(
@@ -107,10 +135,48 @@ test('service view: invoices split across products, then by country, with CSV', 
     ],
   );
   assert.equal(r.services.reduce((n, s) => n + s.share, 0), 1);
+  assert.deepEqual(reportToCsv(r, 'service-eur').trim().split('\n'), [
+    'service,tax_code,country,revenue_eur,share_of_service,share_of_total,invoices,customers',
+    'txcd_it,txcd_it,GB,900.00,0.6207,0.5806,1,1',
+    'txcd_it,txcd_it,CY,550.00,0.3793,0.3548,2,2',
+    '"Marketing, advertising",txcd_mkt,GB,100.00,1.0000,0.0645,1,1',
+  ]);
+});
+
+test('splitMinor: whole units that always add up to the total', () => {
+  assert.deepEqual(splitMinor(1000, [0.9, 0.1]), [900, 100]);
+  assert.deepEqual(splitMinor(100, [1 / 3, 1 / 3, 1 / 3]), [34, 33, 33]);
+  assert.deepEqual(splitMinor(999, [0.5, 0.5]), [500, 499]);
+  assert.deepEqual(splitMinor(1000, [1.25, -0.25]), [1250, -250]);
+  assert.deepEqual(splitMinor(1001, [1]), [1001]);
+});
+
+test('service view in invoice currencies: per tax code, country and currency, never mixed', () => {
+  const agg = new RevenueAggregator('eur', 'test', byCode);
+  const dev = { product: 'prod_dev', description: 'Development', amount: 2 };
+  const ads = { product: 'prod_ads', description: 'Ads', amount: 1 };
+  agg.add(fact({ customerId: 'a', currency: 'gbp', amountPaid: 1000, customerCountry: 'GB', lines: [dev, ads] }), 12);
+  agg.add(fact({ customerId: 'b', currency: 'eur', amountPaid: 500, customerCountry: 'GB', lines: [dev] }), 5);
+  agg.add(fact({ customerId: 'c', currency: 'eur', amountPaid: 700, customerCountry: 'CY', lines: [dev] }), 7);
+  const r = agg.report({});
+  const it = r.services.find((s) => s.key === 'txcd_it')!;
+  const mkt = r.services.find((s) => s.key === 'txcd_mkt')!;
+  // £10.00 split 2:1 in whole pence: 667 + 333.
+  assert.deepEqual(it.byCurrency.map((c) => [c.currency, c.amountMinor, c.invoiceCount]), [['eur', 1200, 2], ['gbp', 667, 1]]);
+  assert.deepEqual(mkt.byCurrency.map((c) => [c.currency, c.amountMinor]), [['gbp', 333]]);
+  assert.deepEqual(
+    it.rows.map((x) => [x.country, x.currency, x.amountMinor, x.baseAmount, x.invoiceCount, x.customerCount]),
+    [
+      ['CY', 'eur', 700, 7, 1, 1],
+      ['GB', 'eur', 500, 5, 1, 1],
+      ['GB', 'gbp', 667, 8, 1, 1],
+    ],
+  );
   assert.deepEqual(reportToCsv(r, 'service').trim().split('\n'), [
-    'service,product_id,country,revenue_eur,share_of_service,share_of_total,invoices,customers',
-    'Software development,prod_dev,GB,900.00,0.6207,0.5806,1,1',
-    'Software development,prod_dev,CY,550.00,0.3793,0.3548,2,2',
-    '"Training, on site",,GB,100.00,1.0000,0.0645,1,1',
+    'service,tax_code,country,currency,revenue,revenue_minor_units,revenue_eur,invoices,customers',
+    'txcd_it,txcd_it,CY,EUR,7.00,700,7.00,1,1',
+    'txcd_it,txcd_it,GB,EUR,5.00,500,5.00,1,1',
+    'txcd_it,txcd_it,GB,GBP,6.67,667,8.00,1,1',
+    'txcd_mkt,txcd_mkt,GB,GBP,3.33,333,4.00,1,1',
   ]);
 });

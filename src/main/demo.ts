@@ -55,12 +55,23 @@ const WORDS_B = ['Labs', 'Studio', 'Systems', 'Analytics', 'Works', 'Digital', '
 const PEOPLE = ['John Doe', 'Jane Doe', 'Joe Bloggs', 'Jane Roe', 'Richard Roe', 'John Q. Public', 'Max Mustermann', 'Erika Mustermann'];
 const PRICES = [49, 99, 149, 249, 499, 1200]; // major units per month
 
-/** Demo products: almost all revenue is software (computer services), with a few minor services. */
+/** Stripe tax codes the demo uses, with their names in Stripe. */
+export const DEMO_TAX_CODES: Record<string, string> = {
+  txcd_10103001: 'Software as a service (SaaS) - business use',
+  txcd_20030000: 'General - Services',
+};
+/** The demo account's default tax code (Tax settings), used for products without one. */
+const DEMO_DEFAULT_TAX_CODE = 'txcd_20030000';
+
+/**
+ * Demo products: almost all revenue is software (SaaS), with a few minor services. Tutoring has no
+ * tax code of its own, so it falls back to the account default.
+ */
 export const DEMO_PRODUCTS = {
-  platform: { id: 'prod_demo_platform', name: 'Analytics platform subscription' },
-  support: { id: 'prod_demo_support', name: 'Priority support' },
-  setup: { id: 'prod_demo_setup', name: 'Onboarding and setup' },
-  tutoring: { id: 'prod_demo_tutoring', name: 'Private tutoring' },
+  platform: { id: 'prod_demo_platform', name: 'Analytics platform subscription', tax_code: 'txcd_10103001' },
+  support: { id: 'prod_demo_support', name: 'Priority support', tax_code: 'txcd_20030000' },
+  setup: { id: 'prod_demo_setup', name: 'Onboarding and setup', tax_code: 'txcd_20030000' },
+  tutoring: { id: 'prod_demo_tutoring', name: 'Private tutoring', tax_code: null },
 } as const satisfies Record<string, ProductLike>;
 
 /** Larger plans include priority support, billed as a second line (this share of the price). */
@@ -268,12 +279,18 @@ export function demoInvoiceSource(nowSec: () => number = () => Math.floor(Date.n
   };
 }
 
-/** Demo products and line items (every demo invoice embeds all of its lines). */
+/** Demo products, tax codes and line items (every demo invoice embeds all of its lines). */
 export function demoServiceSource(): ServiceSource {
   return {
     lineItems: async function* () {},
     products: async function* () {
       yield* Object.values(DEMO_PRODUCTS);
+    },
+    defaultTaxCode: async () => DEMO_DEFAULT_TAX_CODE,
+    taxCodeName: async (id) => {
+      const name = DEMO_TAX_CODES[id];
+      if (!name) throw new Error(`No such tax code: ${id}`);
+      return name;
     },
   };
 }
