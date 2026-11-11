@@ -274,6 +274,37 @@ const SCENES = {
     await r.gif();
   },
 
+  async 'service-view'(page) {
+    await fresh(page);
+    await page.selectOption('#quarter', '3');
+    await page.click('#load');
+    await status(page, '#status');
+    const r = new Recorder(page, 'service-view');
+    await r.overlay();
+    await r.caption('Service view', 'The survey asks for each type of service separately', 2200);
+    await r.click('#service-view');
+    await r.snap(600);
+    await r.spot('#totals', 0, 4);
+    await r.caption('Service mix', 'Each Stripe product’s share of revenue, in EUR', 2800);
+    await r.spot('#service-table tr.service', 0, 2);
+    await r.caption('One group per service, with its countries underneath', 'Invoices are split across their line items by net amount', 3000);
+    await r.spot(null);
+    await r.caption('');
+    await r.scrollTo('#service-table tr.service ~ tr.service');
+    await r.spot('#service-table tr.service ~ tr.service', 0, 2);
+    await r.caption('The smaller services get their own totals too', undefined, 2600);
+    await r.spot(null);
+    await r.scrollTo('#service-table tfoot');
+    await r.spot('#service-table tfoot', 0, 2);
+    await r.caption('Services add up to the same total as the country views', undefined, 2400);
+    await r.spot(null);
+    await r.caption('Export CSV: one row per service and country');
+    await r.click('#export');
+    await status(page, '#status');
+    await r.spot('#status', 2400, 4);
+    await r.gif();
+  },
+
   async vat(page) {
     await fresh(page);
     const r = new Recorder(page, 'vat');
@@ -318,6 +349,51 @@ const SCENES = {
     await r.scrollTo('#vat-intl');
     await r.spot('#vat-intl', 0, 2);
     await r.caption('International: customers outside the EU, outside the scope of Cyprus VAT', undefined, 2600);
+    await r.gif();
+  },
+
+  // Last: it changes saved settings (reset at the end), which the VAT scenes must not see.
+  async options(page) {
+    await fresh(page);
+    const r = new Recorder(page, 'options');
+    // As in the demo-key scene: show the standard location, not the sandbox path with the user name.
+    await page.evaluate(() => (document.querySelector('#options-file').textContent = '~/.config/vaslabs-ltd/stripe-analytics/settings.json'));
+    await r.overlay();
+    await r.caption('Options: which invoices the VAT report fetches', undefined, 1200);
+    await r.click('#tab-options');
+    await r.snap(600);
+    await r.spot('#options-form fieldset', 0, 4);
+    await r.caption('Stripe searches invoices by creation date, the VAT report goes by invoice date', 'A wider search also finds invoices finalized late or back-dated into the quarter', 3200);
+    await r.spot(null);
+    await r.caption('');
+    await r.select('#opt-lookback', '92');
+    await r.click('#opt-after');
+    await r.spot('#options-status', 1800, 6);
+    await r.spot('#opt-statuses', 0, 4);
+    await r.caption('Invoice statuses to include', 'Draft and void are not VAT invoices: include them only to look for mistakes', 2400);
+    await r.spot(null);
+    await r.caption('');
+    await r.click('#opt-statuses input[value="draft"]');
+    await r.snap(1000);
+    await r.caption('Saved straight away, used the next time a report loads', undefined, 1800);
+    await r.caption('');
+    await r.click('#tab-vat');
+    await r.click('#vat-load');
+    await status(page, '#vat-status');
+    await r.snap(400);
+    // The footer is the last thing on the page: room below it keeps the caption from covering it.
+    await page.evaluate(() => (document.body.style.paddingBottom = '160px'));
+    await r.scrollTo('#vat-meta');
+    await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
+    await r.spot('#vat-meta', 0, 4);
+    await r.caption('The report says what it searched', 'Created-date window and statuses', 3000);
+    await r.spot(null);
+    await r.caption('');
+    await page.evaluate(() => (document.body.style.paddingBottom = ''));
+    await r.click('#tab-options');
+    await r.caption('Reset to defaults: fastest search, finalized invoices only');
+    await r.click('#opt-defaults');
+    await r.snap(2200);
     await r.gif();
   },
 };
