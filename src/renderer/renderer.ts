@@ -54,6 +54,10 @@ const eurViewBtn = $<HTMLButtonElement>('#eur-view');
 const eurTable = $<HTMLTableElement>('#eur-table');
 const eurTbody = eurTable.querySelector('tbody')!;
 const eurTfoot = eurTable.querySelector('tfoot')!;
+const serviceViewBtn = $<HTMLButtonElement>('#service-view');
+const serviceTable = $<HTMLTableElement>('#service-table');
+const serviceTbody = serviceTable.querySelector('tbody')!;
+const serviceTfoot = serviceTable.querySelector('tfoot')!;
 
 type SortKey = 'country' | 'currency' | 'amount' | 'base' | 'share' | 'invoices' | 'customers';
 let report: RevenueReport | null = null;
@@ -105,6 +109,24 @@ function renderTotals(r: RevenueReport, currency: string): void {
     legend,
   );
   totalsEl.replaceChildren(mix, cards);
+}
+
+/** Service mix: each service's share of all revenue, in the base currency. */
+function renderServiceTotals(r: RevenueReport): void {
+  const mix = el('div', 'mix');
+  const bar = el('div', 'mix-bar');
+  const legend = el('div', 'mix-legend');
+  r.services.forEach((s, i) => {
+    const seg = el('div', `seg c${i % 4}`);
+    seg.style.width = `${s.share * 100}%`;
+    seg.title = `${s.name} ${pctFmt.format(s.share)}`;
+    bar.append(seg);
+    const item = el('span', 'item');
+    item.append(el('span', `swatch c${i % 4}`), document.createTextNode(`${s.name} ${pctFmt.format(s.share)}`));
+    legend.append(item);
+  });
+  mix.append(el('div', 'k', `Service mix · total ≈ ${formatBase(r, r.baseTotal)}`), bar, legend);
+  totalsEl.replaceChildren(mix);
 }
 
 function shareCell(fraction: number): HTMLTableCellElement {
@@ -166,17 +188,67 @@ function renderEurTable(r: RevenueReport): void {
   markSorted(eurTable, eurSortKey, eurSortAsc);
 }
 
+/** Service view: one group per service (largest first), with its countries underneath. */
+function renderServiceTable(r: RevenueReport): void {
+  const rows: HTMLTableRowElement[] = [];
+  for (const s of r.services) {
+    const head = el('tr', 'service');
+    const name = el('td', undefined, s.name);
+    if (s.key.startsWith('prod_')) name.append(el('span', 'tag', s.key));
+    else name.append(el('span', 'tag', s.key === 'unsplit' ? 'no line items' : 'no product, by description'));
+    head.append(
+      name,
+      el('td', 'num', formatBase(r, s.baseAmount)),
+      shareCell(s.share),
+      el('td', 'num', pctFmt.format(1)),
+      el('td', 'num', String(s.invoiceCount)),
+      el('td', 'num', String(s.customerCount)),
+    );
+    rows.push(head);
+    for (const c of s.countries) {
+      const tr = el('tr', 'service-country');
+      tr.append(
+        countryCell(c.country),
+        el('td', 'num', formatBase(r, c.baseAmount)),
+        el('td', 'num muted', pctFmt.format(r.baseTotal > 0 ? c.baseAmount / r.baseTotal : 0)),
+        shareCell(c.share),
+        el('td', 'num', String(c.invoiceCount)),
+        el('td', 'num', String(c.customerCount)),
+      );
+      rows.push(tr);
+    }
+  }
+  serviceTbody.replaceChildren(...rows);
+
+  const foot = el('tr');
+  foot.append(
+    el('td', undefined, `Total · ${plural(r.services.length, 'service')}`),
+    el('td', 'num', formatBase(r, r.baseTotal)),
+    el('td', 'num', pctFmt.format(r.baseTotal > 0 ? 1 : 0)),
+    el('td'),
+    // An invoice with lines for two services counts once in each, so count invoices, not rows.
+    el('td', 'num', String(r.countries.reduce((n, c) => n + c.invoiceCount, 0))),
+    el('td'),
+  );
+  serviceTfoot.replaceChildren(foot);
+  serviceTable.querySelector<HTMLTableCellElement>('th:nth-child(2)')!.textContent = `≈ ${r.baseCurrency.toUpperCase()}`;
+}
+
 function render(): void {
   if (!report) return;
-  const eur = view === 'eur';
-  eurViewBtn.setAttribute('aria-pressed', String(eur));
+  eurViewBtn.setAttribute('aria-pressed', String(view === 'eur'));
+  serviceViewBtn.setAttribute('aria-pressed', String(view === 'service'));
   // The currency filter only applies to the per-currency view.
-  currencySelect.disabled = eur;
-  table.hidden = eur;
-  eurTable.hidden = !eur;
-  if (eur) {
+  currencySelect.disabled = view !== 'currency';
+  table.hidden = view !== 'currency';
+  eurTable.hidden = view !== 'eur';
+  serviceTable.hidden = view !== 'service';
+  if (view === 'eur') {
     renderEurTable(report);
     renderTotals(report, '');
+  } else if (view === 'service') {
+    renderServiceTable(report);
+    renderServiceTotals(report);
   } else renderTable();
 }
 
@@ -228,7 +300,9 @@ function renderMeta(r: RevenueReport): void {
     `${r.invoicesScanned} paid invoices scanned at ${new Date(r.generatedAt).toLocaleString()}. ` +
     `Country from customer address: ${s.customerAddress}, invoice snapshot: ${s.invoiceSnapshot}, ` +
     `shipping: ${s.shipping}, unknown: ${s.unknown}. ` +
-    `Conversion to ${r.baseCurrency.toUpperCase()}: ${r.fxSource}.`;
+    `Conversion to ${r.baseCurrency.toUpperCase()}: ${r.fxSource}. ` +
+    `Services: each invoice is split across its line items' products by their net amounts.` +
+    (r.servicesNote ? ` ${r.servicesNote}` : '');
 }
 
 function populateCurrencies(r: RevenueReport): void {
@@ -309,6 +383,7 @@ form.addEventListener('submit', async (e) => {
   loadBtn.disabled = true;
   exportBtn.disabled = true;
   eurViewBtn.disabled = true;
+  serviceViewBtn.disabled = true;
   setStatus('Fetching…');
   loading = true;
   const res = await api.revenueByCountry({ from: fromInput.value || undefined, to: toInput.value || undefined });
@@ -317,7 +392,7 @@ form.addEventListener('submit', async (e) => {
   if (!res.ok) {
     setStatus(res.error, true);
     // Keep the previous report usable.
-    exportBtn.disabled = eurViewBtn.disabled = !report;
+    exportBtn.disabled = eurViewBtn.disabled = serviceViewBtn.disabled = !report;
     return;
   }
   report = res.value;
@@ -326,15 +401,19 @@ form.addEventListener('submit', async (e) => {
   renderMeta(report);
   exportBtn.disabled = false;
   eurViewBtn.disabled = false;
+  serviceViewBtn.disabled = false;
   setStatus(`Loaded ${report.invoicesScanned} invoices`);
 });
 
 currencySelect.addEventListener('change', renderTable);
 
-eurViewBtn.addEventListener('click', () => {
-  view = view === 'eur' ? 'currency' : 'eur';
-  render();
-});
+// EUR and Service view toggle on and off; at most one is on, otherwise the per-currency view shows.
+for (const [btn, v] of [[eurViewBtn, 'eur'], [serviceViewBtn, 'service']] as const) {
+  btn.addEventListener('click', () => {
+    view = view === v ? 'currency' : v;
+    render();
+  });
+}
 
 eurTable.querySelector('thead')!.addEventListener('click', (e) => {
   const th = (e.target as HTMLElement).closest<HTMLTableCellElement>('th[data-sort]');

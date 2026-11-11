@@ -47,13 +47,48 @@ export interface CountryTotal {
   currencies: string[];
 }
 
-export type ReportView = 'currency' | 'eur';
+/** One country's part of a service's revenue. */
+export interface ServiceCountryRevenue {
+  country: string;
+  /** Major units of the base currency. */
+  baseAmount: number;
+  /** Fraction (0..1) of the service's revenue. */
+  share: number;
+  invoiceCount: number;
+  customerCount: number;
+}
+
+/**
+ * Revenue for one service: a Stripe product, or for invoice lines without a product, the line
+ * description. Each paid invoice is split across its lines in proportion to their net amounts.
+ */
+export interface ServiceTotal {
+  /** Stable key: the product ID, or `desc:<description>` for lines without a product. */
+  key: string;
+  /** Product name (or the line description, or the product ID if products can't be read). */
+  name: string;
+  /** Major units of the base currency. */
+  baseAmount: number;
+  /** Fraction (0..1) of all revenue, measured in the base currency. */
+  share: number;
+  /** Invoices with at least one line for this service. */
+  invoiceCount: number;
+  customerCount: number;
+  /** Largest first. */
+  countries: ServiceCountryRevenue[];
+}
+
+export type ReportView = 'currency' | 'eur' | 'service';
 
 export interface RevenueReport {
   rows: CountryCurrencyRevenue[];
   totalsByCurrency: CurrencyTotal[];
   /** One row per country, all currencies converted to the base currency (largest first). */
   countries: CountryTotal[];
+  /** One row per service (largest first), each split by country. */
+  services: ServiceTotal[];
+  /** Set when product names couldn't be read, e.g. the key has no access to Products. */
+  servicesNote?: string;
   /** Lower-case currency code all amounts are converted to for comparison. */
   baseCurrency: string;
   /** Sum of all revenue in the base currency, major units. */

@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { vatFetchScope, vatReport, type InvoiceLike, type InvoiceListParams } from './stripe';
+import { revenueByCountry, vatFetchScope, vatReport, type InvoiceLike, type InvoiceListParams, type LineItemLike, type ServiceSource } from './stripe';
 import type { FxRateStore } from './fx';
 import type { Progress } from '../shared/types';
 
@@ -86,4 +86,57 @@ test('VAT report: refuses an empty status list', async () => {
     vatReport(list, fx, { from: '2025-03-01', to: '2025-05-31' }, () => {}, { statuses: [], lookbackDays: 0, includeCreatedAfter: false }),
     /No invoice statuses/,
   );
+});
+
+test('revenue by service: pages line items when Stripe cut them short; names from products', async () => {
+  const line = (product: string | null, amount: number, discount = 0): LineItemLike => ({
+    amount,
+    description: product ?? 'Ad-hoc work',
+    discount_amounts: discount ? [{ amount: discount }] : [],
+    pricing: product ? { price_details: { product } } : null,
+  });
+  const paid = (id: string, lines: InvoiceLike['lines']): InvoiceLike => ({
+    ...inv(id, 'paid', '2025-04-10'),
+    amount_paid: 1000,
+    status_transitions: { paid_at: day('2025-04-10'), finalized_at: null },
+    lines,
+  });
+  const { list } = source([
+    paid('in_short', { data: [line('prod_dev', 1000)], has_more: true }),
+    paid('in_full', { data: [line('prod_dev', 1000, 250), line(null, 250)], has_more: false }),
+  ]);
+  const asked: string[] = [];
+  const services: ServiceSource = {
+    lineItems: async function* (id) {
+      asked.push(id);
+      yield line('prod_dev', 1000);
+      yield line('prod_hosting', 1000);
+    },
+    products: async function* () {
+      yield { id: 'prod_dev', name: 'Development' };
+      yield { id: 'prod_hosting', name: 'Hosting' };
+    },
+  };
+  const r = await revenueByCountry(list, fx, { from: '2025-04-01', to: '2025-04-30' }, () => {}, services);
+  assert.deepEqual(asked, ['in_short']);
+  assert.deepEqual(
+    r.services.map((s) => [s.name, s.baseAmount]),
+    [
+      ['Development', 12.5], // 5 of in_short + 7.50 of in_full (750 of its 1000 net)
+      ['Hosting', 5],
+      ['Ad-hoc work', 2.5],
+    ],
+  );
+  assert.equal(r.servicesNote, undefined);
+
+  // Without access to Products: still a report, by product ID, with a note.
+  const noProducts: ServiceSource = {
+    ...services,
+    products: async function* () {
+      throw new Error('This API call cannot be made with a restricted key');
+    },
+  };
+  const r2 = await revenueByCountry(list, fx, { from: '2025-04-01', to: '2025-04-30' }, () => {}, noProducts);
+  assert.equal(r2.services[0].name, 'prod_dev');
+  assert.match(r2.servicesNote!, /Read access to Products/);
 });

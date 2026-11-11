@@ -12,7 +12,7 @@
  * placeholder names (John Doe, …); any resemblance to real people or businesses is coincidental.
  */
 import { isoDate } from './fx';
-import type { CustomerLike, InvoiceLike, InvoiceListParams, InvoiceSource } from './stripe';
+import type { CustomerLike, InvoiceLike, InvoiceListParams, InvoiceSource, LineItemLike, ProductLike, ServiceSource } from './stripe';
 
 export const DEMO_KEY = 'rk_demo';
 export const isDemoKey = (key: string | undefined): boolean => key?.trim() === DEMO_KEY;
@@ -54,6 +54,30 @@ const WORDS_B = ['Labs', 'Studio', 'Systems', 'Analytics', 'Works', 'Digital', '
 // Private customers get well-known placeholder names, so none can look like a real person.
 const PEOPLE = ['John Doe', 'Jane Doe', 'Joe Bloggs', 'Jane Roe', 'Richard Roe', 'John Q. Public', 'Max Mustermann', 'Erika Mustermann'];
 const PRICES = [49, 99, 149, 249, 499, 1200]; // major units per month
+
+/** Demo products: almost all revenue is software (computer services), with a few minor services. */
+export const DEMO_PRODUCTS = {
+  platform: { id: 'prod_demo_platform', name: 'Analytics platform subscription' },
+  support: { id: 'prod_demo_support', name: 'Priority support' },
+  setup: { id: 'prod_demo_setup', name: 'Onboarding and setup' },
+  tutoring: { id: 'prod_demo_tutoring', name: 'Private tutoring' },
+} as const satisfies Record<string, ProductLike>;
+
+/** Larger plans include priority support, billed as a second line (this share of the price). */
+const SUPPORT_SHARE = 0.1;
+
+function demoLines(c: DemoCustomer, net: number, setupFee: boolean): LineItemLike[] {
+  const line = (product: ProductLike, amount: number): LineItemLike => ({
+    amount,
+    description: product.name,
+    pricing: { price_details: { product: product.id } },
+  });
+  if (setupFee) return [line(DEMO_PRODUCTS.setup, net)];
+  if (c.segment === 'cy_b2c') return [line(DEMO_PRODUCTS.tutoring, net)];
+  if (c.priceMinor < 499_00) return [line(DEMO_PRODUCTS.platform, net)];
+  const support = Math.round(net * SUPPORT_SHARE);
+  return [line(DEMO_PRODUCTS.platform, net - support), line(DEMO_PRODUCTS.support, support)];
+}
 
 interface DemoCustomer {
   customer: CustomerLike;
@@ -205,6 +229,7 @@ function invoicesFor(c: DemoCustomer, k: number, nowSec: number): InvoiceLike[] 
       customer_email: c.customer.email ?? null,
       customer_tax_ids: c.taxId ? [c.taxId] : [],
       customer_address: c.addressOn === 'invoice' && c.country ? { country: c.country } : null,
+      lines: { data: demoLines(c, net, j > 0), has_more: false },
     };
   });
 }
@@ -240,5 +265,15 @@ export function demoInvoiceSource(nowSec: () => number = () => Math.floor(Date.n
       if (params.status && inv.status !== params.status) continue;
       yield inv;
     }
+  };
+}
+
+/** Demo products and line items (every demo invoice embeds all of its lines). */
+export function demoServiceSource(): ServiceSource {
+  return {
+    lineItems: async function* () {},
+    products: async function* () {
+      yield* Object.values(DEMO_PRODUCTS);
+    },
   };
 }

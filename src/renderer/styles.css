@@ -75,6 +75,9 @@ tfoot td { font-weight: 600; border-bottom: none; }
 .c2 { background: #e8833a; }
 .c3 { background: #8a8a96; }
 td.muted { color: var(--muted); }
+#service-table tr.service td { font-weight: 600; background: var(--card); }
+#service-table tr.service-country td:first-child { padding-left: 28px; }
+#service-table .tag { margin-left: 8px; font-size: 11px; font-weight: 400; color: var(--muted); }
 
 table { width: 100%; border-collapse: collapse; background: var(--card); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
 th, td { padding: 8px 12px; border-bottom: 1px solid var(--border); text-align: left; }

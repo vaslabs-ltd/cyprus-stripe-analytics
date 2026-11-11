@@ -24,7 +24,7 @@
         <p id="key-reason"></p>
         <p class="hint">
           Create a <strong>restricted key</strong> in the Stripe Dashboard → Developers → API keys,
-          with <strong>Read</strong> access to Invoices and Customers. Secret keys (sk_…) are refused.
+          with <strong>Read</strong> access to Invoices and Customers (and Products, for service names). Secret keys (sk_…) are refused.
         </p>
         <p class="hint">No Stripe account at hand? Enter <code>rk_demo</code> to try the app with generated data (not saved).</p>
         <label>Restricted key
@@ -63,6 +63,7 @@
       </label>
       <button type="submit" id="load">Load from Stripe</button>
       <button type="button" id="eur-view" aria-pressed="false" disabled title="One row per country, all currencies converted to EUR">EUR view</button>
+      <button type="button" id="service-view" aria-pressed="false" disabled title="Revenue per service (Stripe product), split by country, in EUR">Service view</button>
       <button type="button" id="export" disabled>Export CSV</button>
       <span id="status" class="status" role="status"></span>
     </form>
@@ -93,6 +94,21 @@
           <th data-sort="invoices" class="num">Invoices</th>
           <th data-sort="customers" class="num">Customers</th>
           <th data-sort="currencies">Paid in</th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+      <tfoot></tfoot>
+    </table>
+
+    <table id="service-table" hidden>
+      <thead>
+        <tr>
+          <th>Service · country</th>
+          <th class="num">≈ EUR</th>
+          <th class="num">% of total</th>
+          <th class="num">% of service</th>
+          <th class="num">Invoices</th>
+          <th class="num">Customers</th>
         </tr>
       </thead>
       <tbody></tbody>

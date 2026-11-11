@@ -5,8 +5,18 @@ import path from 'node:path';
 import dotenv from 'dotenv';
 import type Stripe from 'stripe';
 import type { IpcResult, KeyStatus, ReportView, RevenueQuery, RevenueReport, VatQuery, VatReport } from '../shared/types';
-import { checkKeyAccess, createStripeClient, isRestrictedKey, revenueByCountry, stripeInvoiceSource, vatReport, type InvoiceSource } from './stripe';
-import { demoInvoiceSource, isDemoKey } from './demo';
+import {
+  checkKeyAccess,
+  createStripeClient,
+  isRestrictedKey,
+  revenueByCountry,
+  stripeInvoiceSource,
+  stripeServiceSource,
+  vatReport,
+  type InvoiceSource,
+  type ServiceSource,
+} from './stripe';
+import { demoInvoiceSource, demoServiceSource, isDemoKey } from './demo';
 import { vatReportToCsv } from './vat';
 import { reportToCsv } from './analytics';
 import { FxRateStore } from './fx';
@@ -63,6 +73,12 @@ function getInvoices(): InvoiceSource {
   if (demo) return (demoSource ??= demoInvoiceSource());
   stripe ??= createStripeClient(process.env.STRIPE_PASSKEY);
   return stripeInvoiceSource(stripe);
+}
+
+function getServices(): ServiceSource {
+  if (demo) return demoServiceSource();
+  stripe ??= createStripeClient(process.env.STRIPE_PASSKEY);
+  return stripeServiceSource(stripe);
 }
 
 let fxStore: FxRateStore | null = null;
@@ -164,7 +180,7 @@ ipcMain.handle('save-key', async (event, raw: unknown) => {
 });
 
 ipcMain.handle('revenue-by-country', (event, query: RevenueQuery) =>
-  wrap(() => revenueByCountry(getInvoices(), getFxStore(), query ?? {}, (p) => event.sender.send('progress', p))),
+  wrap(() => revenueByCountry(getInvoices(), getFxStore(), query ?? {}, (p) => event.sender.send('progress', p), getServices())),
 );
 
 async function saveCsv(sender: Electron.WebContents, title: string, defaultPath: string, csv: () => string): Promise<string | null> {
@@ -180,8 +196,8 @@ ipcMain.handle('export-csv', (event, report: RevenueReport, view: ReportView) =>
   wrap(() =>
     saveCsv(
       event.sender,
-      'Export revenue by country',
-      `${demo ? 'demo-' : ''}revenue-by-country${view === 'eur' ? '-eur' : ''}-${new Date().toISOString().slice(0, 10)}.csv`,
+      view === 'service' ? 'Export revenue by service' : 'Export revenue by country',
+      `${demo ? 'demo-' : ''}${view === 'service' ? 'revenue-by-service' : 'revenue-by-country'}${view === 'eur' ? '-eur' : ''}-${new Date().toISOString().slice(0, 10)}.csv`,
       () => reportToCsv(report, view),
     ),
   ),

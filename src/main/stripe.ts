@@ -1,6 +1,6 @@
 import Stripe from 'stripe';
 import type { FetchScope, InvoiceStatus, Progress, RevenueQuery, RevenueReport, VatFetchSettings, VatQuery, VatReport } from '../shared/types';
-import { RevenueAggregator, toMajorUnits, type InvoiceFact } from './analytics';
+import { RevenueAggregator, toMajorUnits, type InvoiceFact, type LineFact } from './analytics';
 import { assertSupportedCurrency, BASE_CURRENCY, FX_SOURCE, isoDate, type FxRateStore } from './fx';
 import { buildVatReport, type VatInvoiceFact } from './vat';
 import { DEFAULT_SETTINGS, INVOICE_STATUSES } from './settings';
@@ -47,7 +47,35 @@ export interface InvoiceLike {
   customer_email: string | null;
   customer_tax_ids?: Array<{ type: string; value: string | null }> | null;
   customer_address: { country: string | null } | null;
+  /** The first page of line items (Stripe embeds up to 10). */
+  lines?: { data: LineItemLike[]; has_more: boolean };
 }
+
+/** The invoice line item fields the service split reads. */
+export interface LineItemLike {
+  amount: number;
+  description: string | null;
+  discount_amounts?: Array<{ amount: number }> | null;
+  pricing: { price_details?: { product: string } } | null;
+}
+
+export interface ProductLike {
+  id: string;
+  name: string;
+}
+
+/** Line items and products, for splitting revenue by service. */
+export interface ServiceSource {
+  /** All line items of one invoice, for invoices whose embedded list was cut short. */
+  lineItems(invoiceId: string): AsyncIterable<LineItemLike>;
+  /** All products, active and archived. */
+  products(): AsyncIterable<ProductLike>;
+}
+
+export const stripeServiceSource = (stripe: Stripe): ServiceSource => ({
+  lineItems: (id) => stripe.invoices.listLineItems(id, { limit: 100 }),
+  products: () => stripe.products.list({ limit: 100 }),
+});
 
 export interface CustomerLike {
   id: string;
@@ -81,6 +109,35 @@ function dateToUnix(date: string, endOfDay: boolean): number {
   return Math.floor(ms / 1000);
 }
 
+export function toLineFact(l: LineItemLike): LineFact {
+  const discounts = (l.discount_amounts ?? []).reduce((sum, d) => sum + d.amount, 0);
+  return { product: l.pricing?.price_details?.product ?? null, description: l.description, amount: l.amount - discounts };
+}
+
+async function invoiceLines(inv: InvoiceLike, services: ServiceSource): Promise<LineFact[]> {
+  if (!inv.lines) return [];
+  if (!inv.lines.has_more) return inv.lines.data.map(toLineFact);
+  const all: LineFact[] = [];
+  for await (const l of services.lineItems(inv.id)) all.push(toLineFact(l));
+  return all;
+}
+
+/**
+ * Product names by ID. A key without read access to Products still gets the report: services are
+ * then shown by product ID, with a note saying why.
+ */
+async function productNames(services: ServiceSource, wanted: Set<string>): Promise<{ names: Map<string, string>; note?: string }> {
+  const names = new Map<string, string>();
+  if (!wanted.size) return { names };
+  try {
+    for await (const p of services.products()) names.set(p.id, p.name);
+    return { names };
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    return { names, note: `Services are shown by product ID: product names could not be read (${msg}). Give the key Read access to Products to see names.` };
+  }
+}
+
 function toFact(inv: InvoiceLike): InvoiceFact {
   const c = inv.customer;
   const customer = expandedCustomer(c);
@@ -99,13 +156,15 @@ function toFact(inv: InvoiceLike): InvoiceFact {
 /**
  * Revenue = sum of `amount_paid` over invoices with status "paid", grouped by the
  * customer's country and the invoice currency. Each invoice is also converted to EUR at
- * the ECB rate on its payment date, for cross-currency shares. Read-only: list endpoints only.
+ * the ECB rate on its payment date, for cross-currency shares, and split across its line
+ * items' products for the service view. Read-only: list endpoints only.
  */
 export async function revenueByCountry(
   invoices: InvoiceSource,
   fx: FxRateStore,
   query: RevenueQuery,
   onProgress: (p: Progress) => void,
+  services: ServiceSource = NO_SERVICES,
 ): Promise<RevenueReport> {
   // Reports cover complete past days only: always end at yesterday 23:59:59 UTC at the latest.
   const yesterday = isoDate(Date.now() - 86_400_000);
@@ -119,6 +178,7 @@ export async function revenueByCountry(
   for await (const inv of list) {
     const fact = toFact(inv);
     assertSupportedCurrency(fact.currency);
+    fact.lines = await invoiceLines(inv, services);
     facts.push(fact);
     if (facts.length % 100 === 0) onProgress({ invoicesScanned: facts.length });
   }
@@ -135,8 +195,18 @@ export async function revenueByCountry(
     if (f.paidDate > yesterday) continue;
     agg.add(f, toMajorUnits(f.amountPaid, f.currency) / fx.rate(f.currency, f.paidDate));
   }
-  return agg.report(query);
+  const productIds = new Set(facts.flatMap((f) => (f.lines ?? []).flatMap((l) => (l.product ? [l.product] : []))));
+  const { names, note } = await productNames(services, productIds);
+  const report = agg.report(query, names);
+  if (note) report.servicesNote = note;
+  return report;
 }
+
+/** For callers without line items or products: every invoice is reported as not split. */
+const NO_SERVICES: ServiceSource = {
+  lineItems: async function* () {},
+  products: async function* () {},
+};
 
 const FX_SOURCE_VAT = 'ECB reference rate on the invoice date (cached in data/fx-rates.csv, gaps from api.frankfurter.dev)';
 

@@ -11,7 +11,8 @@ Stripe, built this for two recurring filings:
 1. **Central Bank statistics.** Each calendar quarter, the Central Bank of Cyprus collects the
    Services Survey (QSRVS) through its EDX e-business platform. The **Country Revenue** tab gives
    the revenue side of it, paid invoice totals per customer country and currency for the
-   quarter, with a EUR view and a currency mix.
+   quarter, with a EUR view, a currency mix and a service view (revenue per Stripe product, by
+   country), since the survey asks for each type of service separately.
 2. **VAT and VIES returns.** The **Cyprus VAT** tab splits a VAT quarter's invoices into domestic
    (output VAT owed), EU B2B (the monthly VIES listing, per customer VAT number) and
    international, and flags invoices whose tax treatment looks wrong. Cyprus VAT quarters have
@@ -86,6 +87,21 @@ The **EUR view** button switches the table to one row per country, with every cu
 to EUR and summed (≈ EUR, % of total, invoices, distinct customers, currencies paid in).
 Export CSV exports whichever view is showing. The currency filter doesn't apply in this view.
 
+### Service view
+
+![The service view: service mix, each service split by country, and CSV export](docs/gifs/service-view.gif)
+
+The **Service view** button shows revenue per service, in EUR, with each service split by country
+(≈ EUR, % of total, % of the service, invoices, distinct customers). A service is a Stripe
+**product**; invoice lines without a product are grouped by their description. Each paid invoice is
+split across its line items in proportion to their net amounts (after discounts, before tax), so
+the services add up to the same total as the country views. An invoice with lines for two services
+counts once in each. Export CSV writes one row per service and country
+(`service,product_id,country,revenue_eur,share_of_service,share_of_total,invoices,customers`).
+
+Product names need **Read** access to Products on the key. Without it the report still loads, with
+services shown by product ID and a note under the table.
+
 ### Currency mix
 To compare currencies, each invoice is converted to **EUR** at the ECB reference rate on its
 payment date (`status_transitions.paid_at`). The app shows each currency's share of total revenue
@@ -115,7 +131,7 @@ to use a different path.
 
 ![Picking a VAT quarter scheme and loading the Cyprus VAT report](docs/gifs/vat.gif)
 
-Finalized invoices (`paid`, `open`, `uncollectible`; never `draft` or `void`) whose **invoice date**
+Finalized invoices (`paid`, `open`, `uncollectible` by default; see [Options](#options)) whose **invoice date**
 (`effective_at`, else the finalization date) falls in the chosen VAT quarter, split into:
 
 - **Cyprus VAT**: customers in Cyprus. Net, VAT and gross per invoice; the summary shows the
@@ -143,15 +159,27 @@ product, 0% rate, reverse charge, …), and the Cyprus summary shows how much of
 (e.g. B2C tutoring). Rows are flagged for review when: a Cyprus invoice has no VAT *and* Stripe
 recorded no exemption or 0% rate for it, an EU invoice has VAT or no
 VAT number, an international invoice has VAT, or the country is unknown.
-Not included: credit notes/refunds and input VAT. Invoices are listed by creation date going
-back 365 days before the quarter, to catch invoices finalized or back-dated into it.
-Export CSV writes one row per invoice.
+Not included: credit notes/refunds and input VAT. Export CSV writes one row per invoice.
+
+### Options
+
+![Widening the VAT invoice search and choosing statuses on the Options tab](docs/gifs/options.gif)
+
+Stripe can only search invoices by the date they were **created**, but the VAT report goes by the
+**invoice date**. By default it fetches invoices created within the VAT quarter, which is fastest.
+The **Options** tab widens the search: also fetch invoices created 1, 3 or 12 months before the
+quarter (finalized late), and/or created after it up to yesterday (back-dated into it). It also
+picks the invoice statuses to include: paid, open and uncollectible by default; draft and void only
+to look for mistakes (they're flagged, but counted in the totals). Changes are saved straight away
+to `settings.json` in the config folder (see [Stripe key](#stripe-key-read-only)), and the VAT
+report's footer says which window and statuses it searched.
 
 ## Stripe key (read-only)
 
 Create a **restricted key** in the Stripe Dashboard → Developers → API keys, with **Read** access to:
 - Invoices
 - Customers
+- Products (optional: names in the service view; without it services show by product ID)
 
 The app won't start a query with a standard `sk_` secret key; it accepts only `rk_` restricted keys.
 
