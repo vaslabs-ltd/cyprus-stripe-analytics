@@ -1,4 +1,5 @@
-import type { FetchScope, StripeAnalyticsApi, VatInvoice, VatReport, ViesMonth } from '../shared/types';
+import type { FetchScope, SavedVat, StripeAnalyticsApi, VatInvoice, VatReport, ViesMonth } from '../shared/types';
+import { remember } from './session.js';
 import { $, countryCell, el, formatEurCents, formatMoney, plural, setStatus as setStatusOn, yesterdayUtc } from './ui.js';
 
 /**
@@ -74,7 +75,7 @@ const taxLabel = (i: VatInvoice) => (i.taxReasons.length ? i.taxReasons.map((r) 
 
 const monthLabel = (month: string) => monthYearFmt.format(new Date(`${month}-01T00:00:00Z`));
 
-export function initVatTab(api: StripeAnalyticsApi): void {
+export function initVatTab(api: StripeAnalyticsApi): { restore(saved: SavedVat): void } {
   const form = $<HTMLFormElement>('#vat-query');
   const schemeSelect = $<HTMLSelectElement>('#vat-scheme');
   const periodSelect = $<HTMLSelectElement>('#vat-period');
@@ -131,6 +132,7 @@ export function initVatTab(api: StripeAnalyticsApi): void {
     render(report);
     exportBtn.disabled = false;
     setStatus(`Loaded ${plural(report.invoices.length, 'invoice')}`);
+    remember({ vat: { form: { scheme: schemeSelect.value, period: periodSelect.value }, report } });
   });
 
   exportBtn.addEventListener('click', async () => {
@@ -269,4 +271,23 @@ export function initVatTab(api: StripeAnalyticsApi): void {
     t.tFoot!.append(foot);
     return t;
   }
+
+  return {
+    /** Puts back the tab from the last session. */
+    restore(saved: SavedVat): void {
+      if (saved.form.scheme === 'legacy' || saved.form.scheme === 'calendar') schemeSelect.value = saved.form.scheme;
+      populatePeriods();
+      // A quarter older than the picker goes back still shows.
+      if (![...periodSelect.options].some((o) => o.value === saved.form.period)) {
+        const o = el('option', undefined, saved.form.period.replace('|', ' – '));
+        o.value = saved.form.period;
+        periodSelect.append(o);
+      }
+      periodSelect.value = saved.form.period;
+      report = saved.report;
+      render(report);
+      exportBtn.disabled = false;
+      setStatus(`Restored the last session: ${plural(report.invoices.length, 'invoice')} loaded ${new Date(report.generatedAt).toLocaleString()}`);
+    },
+  };
 }

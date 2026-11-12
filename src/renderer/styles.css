@@ -22,6 +22,7 @@
   }
 }
 * { box-sizing: border-box; }
+[hidden] { display: none !important; }
 body {
   margin: 0;
   padding: 24px 32px;
@@ -75,10 +76,11 @@ tfoot td { font-weight: 600; border-bottom: none; }
 .c2 { background: #e8833a; }
 .c3 { background: #8a8a96; }
 td.muted { color: var(--muted); }
-.service-table tr.service td { font-weight: 600; background: var(--card); vertical-align: top; }
-.service-table tr.service-country td:first-child { padding-left: 28px; }
-.service-table .tag { margin-left: 8px; font-size: 11px; font-weight: 400; color: var(--muted); }
-.service-table .items { font-size: 12px; font-weight: 400; color: var(--muted); margin-top: 2px; }
+.group-table th { cursor: default; }
+.group-table tr.group td { font-weight: 600; background: var(--card); vertical-align: top; }
+.group-table tr.group-country td:first-child { padding-left: 28px; }
+.group-table .tag { margin-left: 8px; font-size: 11px; font-weight: 400; color: var(--muted); }
+.group-table .items { font-size: 12px; font-weight: 400; color: var(--muted); margin-top: 2px; }
 
 table { width: 100%; border-collapse: collapse; background: var(--card); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
 th, td { padding: 8px 12px; border-bottom: 1px solid var(--border); text-align: left; }
@@ -155,3 +157,21 @@ fieldset select { align-self: flex-start; }
 label.check { flex-direction: row; align-items: center; gap: 8px; font-size: 13px; color: var(--fg); }
 label.check input { height: auto; padding: 0; }
 .options-actions { display: flex; gap: 12px; align-items: center; }
+
+#contractors-form { margin-top: 32px; }
+form.options .row { display: flex; gap: 8px; align-items: center; }
+form.options .row input[type='text'] { flex: 1; max-width: 320px; }
+.contractor-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.contractor-list:empty::before { content: 'No contractors yet.'; color: var(--muted); font-size: 13px; }
+.contractor-list li { display: flex; gap: 8px; align-items: center; }
+.contractor-list input { flex: 1; max-width: 320px; }
+.contractor-list .count { color: var(--muted); font-size: 12px; min-width: 90px; }
+.product-table th { cursor: default; }
+.product-table td { padding: 6px 12px; }
+.product-table select { min-width: 200px; }
+
+#pin-form { margin-top: 32px; }
+#pin-form label:not(.check) { max-width: 220px; }
+.pin-state { margin: 0; font-size: 13px; }
+.dialog-actions .dialog-start { margin-right: auto; }
+button.link { height: auto; padding: 0; border: none; background: none; color: var(--accent); text-decoration: underline; font-size: inherit; }

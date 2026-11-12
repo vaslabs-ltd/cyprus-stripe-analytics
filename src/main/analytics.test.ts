@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   NO_TAX_CODE,
   RevenueAggregator,
+  regroupContractors,
   reportToCsv,
   resolveCountry,
   serviceFractions,
@@ -136,10 +137,10 @@ test('service view: invoices split across tax codes, then by country, with CSV',
   );
   assert.equal(r.services.reduce((n, s) => n + s.share, 0), 1);
   assert.deepEqual(reportToCsv(r, 'service-eur').trim().split('\n'), [
-    'service,tax_code,country,revenue_eur,share_of_service,share_of_total,invoices,customers',
-    'txcd_it,txcd_it,GB,900.00,0.6207,0.5806,1,1',
-    'txcd_it,txcd_it,CY,550.00,0.3793,0.3548,2,2',
-    '"Marketing, advertising",txcd_mkt,GB,100.00,1.0000,0.0645,1,1',
+    'service,tax_code,country,revenue_eur,share_of_service,share_of_total,invoices,customers,service_share_of_total',
+    'txcd_it,txcd_it,GB,900.00,0.6207,0.5806,1,1,0.9355',
+    'txcd_it,txcd_it,CY,550.00,0.3793,0.3548,2,2,0.9355',
+    '"Marketing, advertising",txcd_mkt,GB,100.00,1.0000,0.0645,1,1,0.0645',
   ]);
 });
 
@@ -173,10 +174,184 @@ test('service view in invoice currencies: per tax code, country and currency, ne
     ],
   );
   assert.deepEqual(reportToCsv(r, 'service').trim().split('\n'), [
-    'service,tax_code,country,currency,revenue,revenue_minor_units,revenue_eur,invoices,customers',
-    'txcd_it,txcd_it,CY,EUR,7.00,700,7.00,1,1',
-    'txcd_it,txcd_it,GB,EUR,5.00,500,5.00,1,1',
-    'txcd_it,txcd_it,GB,GBP,6.67,667,8.00,1,1',
-    'txcd_mkt,txcd_mkt,GB,GBP,3.33,333,4.00,1,1',
+    'service,tax_code,country,currency,revenue,revenue_minor_units,revenue_eur,invoices,customers,service_share_of_total',
+    'txcd_it,txcd_it,CY,EUR,7.00,700,7.00,1,1,0.8333',
+    'txcd_it,txcd_it,GB,EUR,5.00,500,5.00,1,1,0.8333',
+    'txcd_it,txcd_it,GB,GBP,6.67,667,8.00,1,1,0.8333',
+    'txcd_mkt,txcd_mkt,GB,GBP,3.33,333,4.00,1,1,0.1667',
   ]);
+});
+
+test('product view: invoices split across products by net line amount, with CSV in both views', () => {
+  const agg = new RevenueAggregator('eur', 'test', byCode);
+  const dev = { product: 'prod_dev', description: 'Development', amount: 2 };
+  const ads = { product: 'prod_ads', description: 'Ads', amount: 1 };
+  const adhoc = { product: null, description: 'Ad-hoc', amount: 2 };
+  agg.add(fact({ customerId: 'a', currency: 'gbp', amountPaid: 1000, customerCountry: 'GB', lines: [dev, ads] }), 12);
+  agg.add(fact({ customerId: 'b', currency: 'eur', amountPaid: 500, customerCountry: 'CY', lines: [dev, adhoc] }), 5);
+  agg.add(fact({ customerId: 'c', currency: 'eur', amountPaid: 100, customerCountry: 'CY' }), 1);
+  const r = agg.report({});
+
+  assert.deepEqual(
+    r.products.map((p) => [p.key, p.name, p.items, p.baseAmount, p.invoiceCount, p.customerCount]),
+    [
+      ['prod_dev', 'Development', [], 8 + 2.5, 2, 2],
+      ['prod_ads', 'Ads', [], 4, 1, 1],
+      ['line:Ad-hoc', 'Ad-hoc', [], 2.5, 1, 1],
+      [UNSPLIT_SERVICE, 'Not split (no line items)', [], 1, 1, 1],
+    ],
+  );
+  const dv = r.products[0];
+  assert.deepEqual(dv.byCurrency.map((c) => [c.currency, c.amountMinor]), [['eur', 250], ['gbp', 667]]);
+  // Per currency, products add up to the currency totals exactly.
+  for (const t of r.totalsByCurrency) {
+    const sum = r.products.flatMap((p) => p.byCurrency).filter((c) => c.currency === t.currency).reduce((n, c) => n + c.amountMinor, 0);
+    assert.equal(sum, t.amountMinor, t.currency);
+  }
+  assert.deepEqual(reportToCsv(r, 'product').trim().split('\n').slice(0, 3), [
+    'product,product_id,country,currency,revenue,revenue_minor_units,revenue_eur,invoices,customers,product_share_of_total',
+    'Development,prod_dev,CY,EUR,2.50,250,2.50,1,1,0.5833',
+    'Development,prod_dev,GB,GBP,6.67,667,8.00,1,1,0.5833',
+  ]);
+  assert.deepEqual(reportToCsv(r, 'product-eur').trim().split('\n').slice(0, 2), [
+    'product,product_id,country,revenue_eur,share_of_product,share_of_total,invoices,customers,product_share_of_total',
+    'Development,prod_dev,GB,8.00,0.7619,0.4444,1,1,0.5833',
+  ]);
+  assert.match(reportToCsv(r, 'product-eur'), /\nAd-hoc,,CY,2\.50,/);
+});
+
+test('client view: whole invoices per customer, with the products they bought', () => {
+  const agg = new RevenueAggregator('eur', 'test', byCode);
+  const dev = { product: 'prod_dev', description: 'Development', amount: 2 };
+  const ads = { product: 'prod_ads', description: 'Ads', amount: 1 };
+  agg.add(fact({ customerId: 'cus_a', customerName: 'Acme', currency: 'gbp', amountPaid: 1000, customerCountry: 'GB', lines: [dev, ads] }), 12);
+  agg.add(fact({ customerId: 'cus_a', customerName: 'Acme', currency: 'eur', amountPaid: 300, customerCountry: 'GB', lines: [dev] }), 3);
+  agg.add(fact({ customerId: 'cus_b', customerName: 'Beta, Ltd', currency: 'eur', amountPaid: 500, customerCountry: 'CY', lines: [dev] }), 5);
+  agg.add(fact({ customerId: null, currency: 'eur', amountPaid: 100, customerCountry: 'CY' }), 1);
+  const r = agg.report({});
+
+  assert.deepEqual(
+    r.clients.map((c) => [c.key, c.name, c.items, c.baseAmount, c.invoiceCount, c.customerCount]),
+    [
+      ['cus_a', 'Acme', ['Ads', 'Development'], 15, 2, 1],
+      ['cus_b', 'Beta, Ltd', ['Development'], 5, 1, 1],
+      ['none', 'No customer', [], 1, 1, 0],
+    ],
+  );
+  assert.deepEqual(r.clients[0].byCurrency.map((c) => [c.currency, c.amountMinor]), [['eur', 300], ['gbp', 1000]]);
+  assert.deepEqual(reportToCsv(r, 'client-eur').trim().split('\n'), [
+    'client,customer_id,country,revenue_eur,share_of_total,invoices,customers,client_share_of_total',
+    'Acme,cus_a,GB,15.00,0.7143,2,1,0.7143',
+    '"Beta, Ltd",cus_b,CY,5.00,0.2381,1,1,0.2381',
+    'No customer,,CY,1.00,0.0476,1,0,0.0476',
+  ]);
+  assert.deepEqual(reportToCsv(r, 'client').trim().split('\n').slice(0, 3), [
+    'client,customer_id,country,currency,revenue,revenue_minor_units,revenue_eur,invoices,customers,client_share_of_total',
+    'Acme,cus_a,GB,EUR,3.00,300,3.00,1,1,0.7143',
+    'Acme,cus_a,GB,GBP,10.00,1000,12.00,1,1,0.7143',
+  ]);
+});
+
+test('contractor view: lines go to whoever their product is assigned to, the rest unassigned', () => {
+  const contractors = { names: new Map([['ctr_a', 'Ann'], ['ctr_b', 'Ben']]), byProduct: new Map([['prod_dev', 'ctr_a'], ['prod_ads', 'ctr_b'], ['prod_host', 'ctr_a']]) };
+  const agg = new RevenueAggregator('eur', 'test', byCode, contractors);
+  const dev = { product: 'prod_dev', description: 'Development', amount: 2 };
+  const ads = { product: 'prod_ads', description: 'Ads', amount: 1 };
+  const adhoc = { product: null, description: 'Ad-hoc', amount: 1 };
+  agg.add(fact({ customerId: 'a', currency: 'gbp', amountPaid: 1000, customerCountry: 'GB', lines: [dev, ads] }), 12);
+  agg.add(fact({ customerId: 'b', currency: 'eur', amountPaid: 400, customerCountry: 'CY', lines: [dev, adhoc, { product: 'prod_host', description: 'Hosting', amount: 1 }] }), 4);
+  agg.add(fact({ customerId: 'c', currency: 'eur', amountPaid: 100, customerCountry: 'CY' }), 1);
+  const r = agg.report({});
+
+  assert.deepEqual(
+    r.contractors.map((c) => [c.key, c.name, c.items, c.baseAmount, c.invoiceCount]),
+    [
+      ['ctr_a', 'Ann', ['Development', 'Hosting'], 8 + 3, 2],
+      ['ctr_b', 'Ben', ['Ads'], 4, 1],
+      // Equal totals: by name.
+      [UNSPLIT_SERVICE, 'Not split (no line items)', [], 1, 1],
+      ['unassigned', 'Unassigned', ['Ad-hoc'], 1, 1],
+    ],
+  );
+  assert.deepEqual(r.contractors[0].byCurrency.map((c) => [c.currency, c.amountMinor]), [['eur', 300], ['gbp', 667]]);
+  assert.deepEqual(reportToCsv(r, 'contractor-eur').trim().split('\n').slice(0, 2), [
+    'contractor,products,country,revenue_eur,share_of_contractor,share_of_total,invoices,customers,contractor_share_of_total',
+    'Ann,Development; Hosting,GB,8.00,0.7273,0.4706,1,1,0.6471',
+  ]);
+  assert.equal(reportToCsv(r, 'contractor').split('\n')[0], 'contractor,products,country,currency,revenue,revenue_minor_units,revenue_eur,invoices,customers,contractor_share_of_total');
+
+  // Without contractors everything is unassigned.
+  const none = new RevenueAggregator('eur', 'test', byCode);
+  none.add(fact({ lines: [dev] }), 1);
+  assert.deepEqual(none.report({}).contractors.map((c) => c.key), ['unassigned']);
+});
+
+test('contractors are regrouped from the loaded report when assignments change, as a fresh load would', () => {
+  const dev = { product: 'prod_dev', description: 'Development', amount: 2 };
+  const ads = { product: 'prod_ads', description: 'Ads', amount: 1 };
+  const host = { product: 'prod_host', description: 'Hosting', amount: 1 };
+  const facts = [
+    fact({ customerId: 'a', currency: 'gbp', amountPaid: 1000, customerCountry: 'GB', lines: [dev, ads] }),
+    fact({ customerId: 'b', currency: 'eur', amountPaid: 400, customerCountry: 'CY', lines: [dev, host] }),
+  ];
+  const build = (byProduct: Map<string, string>) => {
+    const agg = new RevenueAggregator('eur', 'test', byCode, { names: new Map([['ctr_a', 'Ann'], ['ctr_b', 'Ben']]), byProduct });
+    facts.forEach((f, i) => agg.add(f, [12, 4][i]));
+    return agg.report({});
+  };
+  const before = build(new Map([['prod_dev', 'ctr_a']]));
+  assert.deepEqual(before.contractors.map((c) => [c.name, Math.round(c.baseAmount * 100) / 100]), [['Ann', 10.67], ['Unassigned', 5.33]]);
+
+  const moved = new Map([['prod_dev', 'ctr_b'], ['prod_host', 'ctr_b'], ['prod_ads', 'ctr_a']]);
+  const names = new Map([['ctr_a', 'Ann'], ['ctr_b', 'Ben']]);
+  const after = regroupContractors(before, { names, byProduct: moved });
+  assert.deepEqual(after.contractors, build(moved).contractors);
+  // Ben has two products on invoice b: it still counts once.
+  assert.deepEqual(after.contractors.map((c) => [c.name, c.baseAmount, c.invoiceCount, c.items]), [
+    ['Ben', 8 + 4, 2, ['Development', 'Hosting']],
+    ['Ann', 4, 1, ['Ads']],
+  ]);
+  // Everything else is untouched; an older report without product parts comes back as it was.
+  assert.equal(after.products, before.products);
+  const old = { ...before, productParts: undefined };
+  assert.equal(regroupContractors(old, { names, byProduct: moved }), old);
+});
+
+test('contractor breakdown by product and by client, with shares of the contractor and CSV', () => {
+  const contractors = { names: new Map([['ctr_a', 'Ann']]), byProduct: new Map([['prod_dev', 'ctr_a'], ['prod_host', 'ctr_a']]) };
+  const agg = new RevenueAggregator('eur', 'test', byCode, contractors);
+  const dev = { product: 'prod_dev', description: 'Development', amount: 3 };
+  const host = { product: 'prod_host', description: 'Hosting', amount: 1 };
+  agg.add(fact({ customerId: 'cus_x', customerName: 'Xeno', currency: 'eur', amountPaid: 800, customerCountry: 'CY', lines: [dev, host] }), 8);
+  agg.add(fact({ customerId: 'cus_y', customerName: 'Yarrow', currency: 'gbp', amountPaid: 400, customerCountry: 'GB', lines: [dev] }), 4);
+  const r = agg.report({});
+  const ann = r.contractors.find((c) => c.key === 'ctr_a')!;
+  assert.deepEqual(
+    ann.sub!.product.map((p) => [p.name, p.baseAmount, p.share, p.invoiceCount, p.byCurrency.map((c) => [c.currency, c.amountMinor])]),
+    [
+      ['Development', 10, 10 / 12, 2, [['eur', 600], ['gbp', 400]]],
+      ['Hosting', 2, 2 / 12, 1, [['eur', 200]]],
+    ],
+  );
+  // Per client, an invoice with two of Ann's products counts once.
+  assert.deepEqual(
+    ann.sub!.client.map((c) => [c.name, c.baseAmount, c.invoiceCount, c.items]),
+    [
+      ['Xeno', 8, 1, ['Development', 'Hosting']],
+      ['Yarrow', 4, 1, ['Development']],
+    ],
+  );
+  assert.deepEqual(reportToCsv(r, 'contractor-eur', 'client').trim().split('\n'), [
+    'contractor,products,client,revenue_eur,share_of_contractor,share_of_total,invoices,customers,contractor_share_of_total',
+    'Ann,Development; Hosting,Xeno,8.00,0.6667,0.6667,1,1,1.0000',
+    'Ann,Development; Hosting,Yarrow,4.00,0.3333,0.3333,1,1,1.0000',
+  ]);
+  assert.deepEqual(reportToCsv(r, 'contractor', 'product').trim().split('\n'), [
+    'contractor,products,product,currency,revenue,revenue_minor_units,revenue_eur,invoices,customers,contractor_share_of_total',
+    'Ann,Development; Hosting,Development,EUR,6.00,600,6.00,1,1,1.0000',
+    'Ann,Development; Hosting,Development,GBP,4.00,400,4.00,1,1,1.0000',
+    'Ann,Development; Hosting,Hosting,EUR,2.00,200,2.00,1,1,1.0000',
+  ]);
+  // The breakdown is only for contractors; by country is the default.
+  assert.equal(reportToCsv(r, 'contractor-eur').split('\n')[0].split(',')[2], 'country');
 });

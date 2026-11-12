@@ -12,7 +12,7 @@
       Nothing is saved: restart the app or enter a real key to leave.
     </div>
     <nav class="tabs" role="tablist" aria-label="Reports">
-      <button type="button" role="tab" id="tab-country" aria-controls="panel-country" aria-selected="true">Country Revenue</button>
+      <button type="button" role="tab" id="tab-country" aria-controls="panel-country" aria-selected="true">Revenue</button>
       <button type="button" role="tab" id="tab-vat" aria-controls="panel-vat" aria-selected="false" tabindex="-1">Cyprus VAT</button>
       <button type="button" role="tab" id="tab-options" aria-controls="panel-options" aria-selected="false" tabindex="-1">Options</button>
       <button type="button" id="key-open" class="tabs-end">Stripe key…</button>
@@ -24,13 +24,17 @@
         <p id="key-reason"></p>
         <p class="hint">
           Create a <strong>restricted key</strong> in the Stripe Dashboard → Developers → API keys,
-          with <strong>Read</strong> access to Invoices and Customers (plus Products and Tax settings, for the service view's tax codes). Secret keys (sk_…) are refused.
+          with <strong>Read</strong> access to Invoices and Customers (plus Products and Tax settings, for product names and the service view's tax codes). Secret keys (sk_…) are refused.
         </p>
         <p class="hint">No Stripe account at hand? Enter <code>rk_demo</code> to try the app with generated data (not saved).</p>
         <label>Restricted key
           <input type="password" id="key-input" placeholder="rk_live_…" autocomplete="off" spellcheck="false" required />
         </label>
-        <p class="hint">Saved to <code id="key-file"></code>, readable only by you.</p>
+        <p class="hint" id="key-file-hint">Saved to <code id="key-file"></code>, readable only by you.</p>
+        <p class="hint" id="key-locked" hidden>
+          The saved key is encrypted with your PIN. <button type="button" id="key-unlock" class="link">Unlock it with the PIN</button>
+          — entering a new key here removes the PIN and the saved session instead.
+        </p>
         <p id="key-error" class="status error" role="alert"></p>
         <div class="dialog-actions">
           <button type="button" id="key-cancel">Cancel</button>
@@ -39,10 +43,26 @@
       </form>
     </dialog>
 
+    <dialog id="unlock-dialog" aria-labelledby="unlock-title">
+      <form id="unlock-form" method="dialog">
+        <h2 id="unlock-title">Unlock</h2>
+        <p id="unlock-reason"></p>
+        <label>PIN
+          <input type="password" id="unlock-pin" inputmode="numeric" pattern="[0-9]{4,8}" minlength="4" maxlength="8" autocomplete="off" required />
+        </label>
+        <p id="unlock-error" class="status error" role="alert"></p>
+        <div class="dialog-actions">
+          <button type="button" id="unlock-forgot" class="dialog-start">Forgot PIN…</button>
+          <button type="button" id="unlock-skip">Not now</button>
+          <button type="submit" id="unlock-submit" class="primary">Unlock</button>
+        </div>
+      </form>
+    </dialog>
+
     <section id="panel-country" role="tabpanel" aria-labelledby="tab-country">
     <header>
-      <h1>Revenue by country</h1>
-      <p class="sub">Paid invoices, grouped by customer country and invoice currency (Central Bank statistics).</p>
+      <h1 id="revenue-title">Revenue by country</h1>
+      <p class="sub" id="revenue-sub">Paid invoices, grouped by customer country and invoice currency (Central Bank statistics).</p>
     </header>
 
     <form id="query">
@@ -61,9 +81,24 @@
       <label>Currency
         <select id="currency"><option value="">All</option></select>
       </label>
+      <label>Group by
+        <select id="group-by" title="Group revenue by country, service (Stripe tax code), product or client; combine with EUR view to convert">
+          <option value="country">Country</option>
+          <option value="service">Service (tax code)</option>
+          <option value="product">Product</option>
+          <option value="client">Client</option>
+          <option value="contractor">Contractor</option>
+        </select>
+      </label>
+      <label id="breakdown-label" hidden>Break down by
+        <select id="breakdown" title="What each contractor's revenue is split by underneath">
+          <option value="product">Product</option>
+          <option value="country">Country</option>
+          <option value="client">Client</option>
+        </select>
+      </label>
       <button type="submit" id="load">Load from Stripe</button>
       <button type="button" id="eur-view" aria-pressed="false" disabled title="Convert every currency to EUR and sum">EUR view</button>
-      <button type="button" id="service-view" aria-pressed="false" disabled title="Revenue per service (Stripe tax code), split by country; combine with EUR view to convert">Service view</button>
       <button type="button" id="export" disabled>Export CSV</button>
       <span id="status" class="status" role="status"></span>
     </form>
@@ -100,13 +135,13 @@
       <tfoot></tfoot>
     </table>
 
-    <table id="service-table" class="service-table" hidden>
+    <table id="group-table" class="group-table" hidden>
       <thead>
         <tr>
-          <th>Tax code · country</th>
+          <th class="group-label">Tax code · country</th>
           <th class="num">≈ EUR</th>
           <th class="num">% of total</th>
-          <th class="num">% of service</th>
+          <th class="num group-share">% of tax code</th>
           <th class="num">Invoices</th>
           <th class="num">Customers</th>
         </tr>
@@ -115,14 +150,15 @@
       <tfoot></tfoot>
     </table>
 
-    <table id="service-cur-table" class="service-table" hidden>
+    <table id="group-cur-table" class="group-table" hidden>
       <thead>
         <tr>
-          <th>Tax code · country</th>
+          <th class="group-label">Tax code · country</th>
           <th>Currency</th>
           <th class="num">Revenue</th>
           <th class="num">≈ EUR</th>
-          <th class="num">% of service</th>
+          <th class="num" title="Share of all revenue, compared in EUR">% of total</th>
+          <th class="num group-share" title="Share of the group's revenue, compared in EUR">% of tax code</th>
           <th class="num">Invoices</th>
           <th class="num">Customers</th>
         </tr>
@@ -173,7 +209,7 @@
     <section id="panel-options" role="tabpanel" aria-labelledby="tab-options" hidden>
       <header>
         <h1>Options</h1>
-        <p class="sub">Saved to <code id="options-file"></code> and used the next time a report loads.</p>
+        <p class="sub" id="options-sub">Saved to <code id="options-file"></code> and used the next time a report loads.</p>
       </header>
 
       <form id="options-form" class="options">
@@ -218,6 +254,81 @@
           <button type="button" id="opt-defaults">Reset to defaults</button>
           <span id="options-status" class="status" role="status"></span>
         </div>
+      </form>
+
+      <form id="pin-form" class="options">
+        <h2>Last session</h2>
+        <p class="hint">
+          With a PIN, the app keeps the reports you last loaded (dates, views and data) and restores them when it starts
+          again, after you enter the PIN. They're encrypted with a key made from the PIN together with the Stripe key.
+          Without a PIN nothing is kept.
+        </p>
+
+        <fieldset id="pin-fields">
+          <legend>PIN</legend>
+          <p id="pin-state" class="pin-state"></p>
+          <label id="pin-current-label" hidden>Current PIN
+            <input type="password" id="pin-current" inputmode="numeric" pattern="[0-9]{4,8}" maxlength="8" autocomplete="off" />
+          </label>
+          <label><span id="pin-new-text">PIN (4–8 digits)</span>
+            <input type="password" id="pin-new" inputmode="numeric" pattern="[0-9]{4,8}" maxlength="8" autocomplete="off" />
+          </label>
+          <label>Repeat the PIN
+            <input type="password" id="pin-repeat" inputmode="numeric" pattern="[0-9]{4,8}" maxlength="8" autocomplete="off" />
+          </label>
+          <label class="check">
+            <input type="checkbox" id="pin-encrypt-key" />
+            Also encrypt the Stripe key with this PIN (it's removed from the .env file, and the PIN is asked for at every start)
+          </label>
+          <p id="pin-key-note" class="hint" hidden></p>
+          <div class="options-actions">
+            <button type="submit" id="pin-save">Set PIN</button>
+            <button type="button" id="pin-unlock" hidden>Unlock…</button>
+            <button type="button" id="pin-lock" hidden>Lock now</button>
+            <button type="button" id="pin-remove" hidden>Remove PIN</button>
+            <span id="pin-status" class="status" role="status"></span>
+          </div>
+        </fieldset>
+        <p class="hint">
+          The PIN isn't stored anywhere and can't be recovered: if it's forgotten, the saved session is lost (and an
+          encrypted Stripe key has to be entered again). A 4–8 digit PIN keeps the files from being read casually, but
+          someone with a copy of them and enough time could try every PIN.
+        </p>
+      </form>
+
+      <form id="contractors-form" class="options">
+        <h2>Contractors</h2>
+        <p class="hint">
+          Add contractors, then assign each Stripe product to one of them. Grouping the Revenue tab by
+          contractor adds up the revenue of each contractor's products, split across invoice lines like the
+          product view. Products not assigned to anyone show as Unassigned. Changes apply to the loaded report straight away.
+        </p>
+
+        <fieldset>
+          <legend>Contractors</legend>
+          <ul id="contractor-list" class="contractor-list"></ul>
+          <div class="row">
+            <input type="text" id="contractor-name" placeholder="Name" maxlength="100" autocomplete="off" aria-label="New contractor's name" />
+            <button type="submit" id="contractor-add">Add contractor</button>
+          </div>
+        </fieldset>
+
+        <fieldset>
+          <legend>Products</legend>
+          <div class="row">
+            <button type="button" id="products-load">Load products from Stripe</button>
+            <span id="contractors-status" class="status" role="status"></span>
+          </div>
+          <table id="product-table" class="product-table" hidden>
+            <thead>
+              <tr>
+                <th>Product</th>
+                <th>Contractor</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </fieldset>
       </form>
     </section>
 

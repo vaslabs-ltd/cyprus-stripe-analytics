@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { revenueByCountry, vatFetchScope, vatReport, type InvoiceLike, type InvoiceListParams, type LineItemLike, type ServiceSource } from './stripe';
+import { listProducts, revenueByCountry, vatFetchScope, vatReport, type InvoiceLike, type InvoiceListParams, type LineItemLike, type ProductLike, type ServiceSource } from './stripe';
 import type { FxRateStore } from './fx';
 import type { Progress } from '../shared/types';
 
@@ -133,6 +133,16 @@ test('revenue by service: tax code from the product, else the account default; l
     ],
   );
   assert.equal(r.servicesNote, undefined);
+  // Product view: product names from Products, lines without a product by description.
+  assert.deepEqual(
+    r.products.map((p) => [p.key, p.name, p.baseAmount]),
+    [
+      ['prod_dev', 'Development', 12.5],
+      ['line:Ad-hoc work', 'Ad-hoc work', 2.5],
+      ['prod_ads', 'Ads', 2.5],
+      ['prod_misc', 'Misc', 2.5],
+    ],
+  );
 
   // No account default: lines without a product tax code have none.
   const r2 = await revenueByCountry(list, fx, range, () => {}, { ...services, defaultTaxCode: async () => null });
@@ -146,7 +156,34 @@ test('revenue by service: tax code from the product, else the account default; l
   // The ad-hoc line has no product, so the account default still applies to it.
   assert.deepEqual(r3.services.map((s) => [s.key, s.baseAmount]), [['unknown', 17.5], ['txcd_20030000', 2.5]]);
   assert.match(r3.servicesNote!, /Read access to Products/);
+  // Product names unreadable: products still split, named by their line description.
+  assert.deepEqual(r3.products.map((p) => [p.key, p.name]).slice(0, 2), [['prod_dev', 'prod_dev line'], ['line:Ad-hoc work', 'Ad-hoc work']]);
   const r4 = await revenueByCountry(list, fx, range, () => {}, { ...services, defaultTaxCode: denied });
   assert.equal(r4.services.find((s) => s.key === 'unknown')?.baseAmount, 5);
   assert.match(r4.servicesNote!, /Read access to Tax settings/);
 });
+
+test('listProducts: active first, then archived, by name; a clear error without access', async () => {
+  const src = (items: ProductLike[]): ServiceSource => ({ ...emptyServices, products: async function* () { yield* items; } });
+  const list = await listProducts(
+    src([
+      { id: 'prod_z', name: 'Zeta' },
+      { id: 'prod_old', name: 'Alpha', active: false },
+      { id: 'prod_a', name: 'Alpha', active: true },
+    ]),
+  );
+  assert.deepEqual(list, [
+    { id: 'prod_a', name: 'Alpha', active: true },
+    { id: 'prod_z', name: 'Zeta', active: true },
+    { id: 'prod_old', name: 'Alpha', active: false },
+  ]);
+  const denied: ServiceSource = { ...emptyServices, products: async function* () { throw new Error('no access'); } };
+  await assert.rejects(listProducts(denied), /Read access to Products/);
+});
+
+const emptyServices: ServiceSource = {
+  lineItems: async function* () {},
+  products: async function* () {},
+  defaultTaxCode: async () => null,
+  taxCodeName: async (id) => id,
+};

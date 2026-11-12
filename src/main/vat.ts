@@ -53,7 +53,7 @@ export interface VatInvoiceFact {
 
 /**
  * For VAT the invoice is the legal document, so the address printed on it wins over the
- * customer's current address (unlike the Country Revenue report).
+ * customer's current address (unlike the revenue report).
  */
 export function resolveVatCountry(f: Pick<VatInvoiceFact, 'invoiceCountry' | 'customerCountry' | 'shippingCountry'>): string {
   const c = f.invoiceCountry || f.customerCountry || f.shippingCountry;

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { DEMO_TAX_CODES, demoInvoiceSource, demoServiceSource, generateDemoInvoices, isDemoKey } from './demo';
+import { DEMO_PRODUCTS, DEMO_TAX_CODES, demoInvoiceSource, demoServiceSource, generateDemoInvoices, isDemoKey } from './demo';
 import { FxRateStore, SUPPORTED_CURRENCIES, type FetchJson } from './fx';
 import { revenueByCountry, vatReport, type InvoiceLike } from './stripe';
 
@@ -87,6 +87,14 @@ test('demo data fills both reports, including rows the VAT tab flags', async () 
   assert.equal(bySvc.servicesNote, undefined);
   const sum = bySvc.services.reduce((n, s) => n + s.baseAmount, 0);
   assert.ok(Math.abs(sum - bySvc.baseTotal) < 1e-6);
+  // Products and clients cover the same revenue.
+  const ids = new Set<string>(Object.values(DEMO_PRODUCTS).map((p) => p.id));
+  assert.ok(bySvc.products.length >= 3 && bySvc.products.every((p) => ids.has(p.key)), bySvc.products.map((p) => p.key).join());
+  for (const groups of [bySvc.products, bySvc.clients]) {
+    assert.ok(Math.abs(groups.reduce((n, g) => n + g.baseAmount, 0) - bySvc.baseTotal) < 1e-6);
+  }
+  assert.ok(bySvc.clients.length > 10, `${bySvc.clients.length} clients`);
+  assert.ok(bySvc.clients.every((c) => c.name !== c.key && c.items.length > 0));
 
   const vat = await vatReport(src, fxStore(), { from: '2025-06-01', to: '2025-08-31' }, progress);
   const sections = new Set(vat.invoices.map((i) => i.section));

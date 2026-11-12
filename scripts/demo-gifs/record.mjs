@@ -282,11 +282,11 @@ const SCENES = {
     const r = new Recorder(page, 'service-view');
     await r.overlay();
     await r.caption('Service view', 'The survey asks for each type of service separately', 2200);
-    await r.click('#service-view');
+    await r.select('#group-by', 'service');
     await r.snap(600);
-    await r.spot('#service-cur-table tr.service', 0, 2);
+    await r.spot('#group-cur-table tr.group', 0, 2);
     await r.caption('Grouped by Stripe tax code, in the invoice currencies', 'The product’s tax code, else the account default', 3200);
-    await r.spot('#service-cur-table tr.service + tr', 0, 2);
+    await r.spot('#group-cur-table tr.group + tr', 0, 2);
     await r.caption('A row per country and currency', 'Currencies are never added together', 2600);
     await r.spot(null);
     await r.caption('Combine with EUR view to convert and sum');
@@ -294,17 +294,150 @@ const SCENES = {
     await r.snap(600);
     await r.spot('#totals', 0, 4);
     await r.caption('Service mix in EUR', undefined, 2400);
-    await r.spot('#service-table tr.service', 0, 2);
+    await r.spot('#group-table tr.group', 0, 2);
     await r.caption('One group per tax code, with the products under it and its countries', 'Invoices are split across their line items by net amount', 3200);
     await r.spot(null);
     await r.caption('');
-    await r.scrollTo('#service-table tr.service ~ tr.service');
-    await r.spot('#service-table tr.service ~ tr.service', 0, 2);
+    await r.scrollTo('#group-table tr.group ~ tr.group');
+    await r.spot('#group-table tr.group ~ tr.group', 0, 2);
     await r.caption('Minor services get their own totals too', 'Here support and tutoring, under General - Services', 2600);
     await r.spot(null);
-    await r.scrollTo('#service-table tfoot');
-    await r.spot('#service-table tfoot', 0, 2);
+    await r.scrollTo('#group-table tfoot');
+    await r.spot('#group-table tfoot', 0, 2);
     await r.caption('Services add up to the same total as the country views', undefined, 2400);
+    await r.spot(null);
+    await r.caption('Export CSV writes whichever view is showing');
+    await r.click('#export');
+    await status(page, '#status');
+    await r.spot('#status', 2400, 4);
+    await r.gif();
+  },
+
+  async 'product-view'(page) {
+    await fresh(page);
+    await page.selectOption('#quarter', '3');
+    await page.click('#load');
+    await status(page, '#status');
+    const r = new Recorder(page, 'product-view');
+    await r.overlay();
+    await r.caption('Product view', 'Revenue per Stripe product', 2000);
+    await r.select('#group-by', 'product');
+    await r.snap(600);
+    await r.spot('#group-cur-table tr.group', 0, 2);
+    await r.caption('One group per product, in the invoice currencies', 'Each invoice is split across its line items by net amount', 3000);
+    await r.spot('#group-cur-table tr.group + tr', 0, 2);
+    await r.caption('Split by country and currency', 'Currencies are never added together', 2400);
+    await r.spot(null);
+    await r.caption('Turn on EUR view to compare products in one currency');
+    await r.click('#eur-view');
+    await r.snap(600);
+    await r.spot('#totals', 0, 4);
+    await r.caption('Each product’s share of revenue, converted to EUR', undefined, 2600);
+    await r.spot('#group-table', 0, 2);
+    await r.caption('Products, largest first, with their countries', 'They add up to the same total as the country views', 3000);
+    await r.spot(null);
+    await r.caption('Export CSV writes whichever view is showing');
+    await r.click('#export');
+    await status(page, '#status');
+    await r.spot('#status', 2400, 4);
+    await r.gif();
+  },
+
+  async 'client-view'(page) {
+    await fresh(page);
+    await page.selectOption('#quarter', '3');
+    await page.click('#load');
+    await status(page, '#status');
+    const r = new Recorder(page, 'client-view');
+    await r.overlay();
+    await r.caption('Client view', 'Revenue per Stripe customer', 2000);
+    await r.select('#group-by', 'client');
+    await r.snap(600);
+    await r.spot('#group-cur-table tr.group', 0, 2);
+    await r.caption('One row per client, in the invoice currencies', 'With their share of total revenue, country and the products they paid for', 3000);
+    await r.spot(null);
+    await r.caption('Filter to a single currency');
+    await r.select('#currency', 'usd');
+    await r.snap(1800);
+    await r.select('#currency', '');
+    await r.caption('Or turn on EUR view to rank every client in one currency');
+    await r.click('#eur-view');
+    await r.snap(600);
+    await r.spot('#totals', 0, 4);
+    await r.caption('The top clients’ share of revenue', 'The rest are grouped together', 2600);
+    await r.spot('#group-table tbody', 0, 2);
+    await r.caption('Largest first, converted to EUR', 'Invoices are counted whole for each client', 2800);
+    await r.spot(null);
+    await r.caption('');
+    await r.scrollTo('#group-table tfoot');
+    await r.spot('#group-table tfoot', 0, 2);
+    await r.caption('Clients add up to the same total as the country views', undefined, 2400);
+    await r.spot(null);
+    await r.caption('Export CSV writes whichever view is showing');
+    await r.click('#export');
+    await status(page, '#status');
+    await r.spot('#status', 2400, 4);
+    await r.gif();
+  },
+
+  async contractors(page) {
+    await fresh(page);
+    const r = new Recorder(page, 'contractors');
+    await r.overlay();
+    await r.caption('Contractors', 'Set them up on the Options tab', 1400);
+    await r.click('#tab-options');
+    await r.scrollTo('#contractors-form');
+    await r.spot('#contractors-form fieldset', 0, 4);
+    await r.caption('Add contractors', 'Kept in memory in demo mode; saved to settings.json otherwise', 2200);
+    await r.spot(null);
+    await r.caption('');
+    for (const name of ['Contractor A', 'Contractor B']) {
+      await r.type('#contractor-name', name);
+      await r.click('#contractor-add');
+      await page.waitForFunction((n) => [...document.querySelectorAll('#contractor-list input')].some((i) => i.value === n), name);
+      await r.snap(500);
+    }
+    await page.waitForSelector('#product-table:not([hidden])');
+    await r.scrollTo('#product-table');
+    await r.spot('#products-load', 0, 4);
+    await r.caption('Products are loaded from Stripe when Options opens', 'Reload them here after adding one in Stripe', 2200);
+    await r.spot('#product-table', 0, 4);
+    await r.caption('Assign each product to a contractor', 'Products left unassigned are reported as Unassigned', 2000);
+    await r.spot(null);
+    for (const [product, label] of [['prod_demo_platform', 'Contractor A'], ['prod_demo_support', 'Contractor B'], ['prod_demo_setup', 'Contractor B']]) {
+      const sel = `#product-table select[data-product="${product}"]`;
+      await r.select(sel, { label });
+      await r.snap(500);
+    }
+    await r.spot('#contractor-list', 0, 4);
+    await r.caption('Each contractor shows how many products they have', undefined, 2000);
+    await r.spot(null);
+    await r.caption('');
+    await r.click('#tab-country');
+    await page.evaluate(() => window.scrollTo(0, 0));
+    await r.caption('On the Revenue tab, group by contractor');
+    await r.select('#quarter', '3');
+    await r.select('#group-by', 'contractor');
+    await r.click('#load');
+    await status(page, '#status');
+    await r.snap(500);
+    await r.spot('#group-cur-table tr.group', 0, 2);
+    await r.caption('Revenue per contractor, in the invoice currencies', 'With their share of total revenue', 2600);
+    await r.spot('#group-cur-table tr.group + tr', 0, 2);
+    await r.caption('Broken down by product underneath', 'Each product’s share of the contractor, measured in EUR', 2600);
+    await r.spot(null);
+    await r.caption('Or by client, or by country: one at a time');
+    await r.select('#breakdown', 'client');
+    await r.snap(1600);
+    await r.select('#breakdown', 'country');
+    await r.snap(1400);
+    await r.select('#breakdown', 'product');
+    await r.snap(600);
+    await r.caption('EUR view converts and ranks them');
+    await r.click('#eur-view');
+    await r.snap(600);
+    await r.spot('#totals', 0, 4);
+    await r.caption('Each contractor’s share of revenue', 'Invoices are split across their line items, like the product view', 3000);
     await r.spot(null);
     await r.caption('Export CSV writes whichever view is showing');
     await r.click('#export');
@@ -364,8 +497,6 @@ const SCENES = {
   async options(page) {
     await fresh(page);
     const r = new Recorder(page, 'options');
-    // As in the demo-key scene: show the standard location, not the sandbox path with the user name.
-    await page.evaluate(() => (document.querySelector('#options-file').textContent = '~/.config/vaslabs-ltd/stripe-analytics/settings.json'));
     await r.overlay();
     await r.caption('Options: which invoices the VAT report fetches', undefined, 1200);
     await r.click('#tab-options');
@@ -383,7 +514,7 @@ const SCENES = {
     await r.caption('');
     await r.click('#opt-statuses input[value="draft"]');
     await r.snap(1000);
-    await r.caption('Saved straight away, used the next time a report loads', undefined, 1800);
+    await r.caption('Saved straight away, used the next time a report loads', 'In demo mode, kept in memory only', 1800);
     await r.caption('');
     await r.click('#tab-vat');
     await r.click('#vat-load');
@@ -403,6 +534,66 @@ const SCENES = {
     await r.click('#opt-defaults');
     await r.snap(2200);
     await r.gif();
+  },
+
+  // Last: a PIN set in demo mode lasts the whole run (in memory), and is removed again at the end.
+  async session(page) {
+    await fresh(page);
+    const r = new Recorder(page, 'session');
+    await r.overlay();
+    await r.caption('Carry on after a restart', 'The last session can be kept, encrypted with a PIN', 2200);
+    await r.click('#tab-options');
+    await r.scrollTo('#pin-form');
+    await r.spot('#pin-fields', 0, 4);
+    await r.caption('Set a 4–8 digit PIN', 'Combined with the Stripe key, it encrypts the saved session', 2200);
+    await r.spot(null);
+    await r.caption('');
+    await r.type('#pin-new', '2468');
+    await r.type('#pin-repeat', '2468');
+    await r.spot('label:has(#pin-encrypt-key)', 0, 4);
+    await r.caption('Optionally encrypt the Stripe key with it too', 'Then the PIN is asked for at every start (demo mode has no key to encrypt)', 2600);
+    await r.spot(null);
+    await r.caption('');
+    await r.click('#pin-save');
+    await page.waitForFunction(() => document.querySelector('#pin-status')?.textContent === 'PIN set');
+    await r.spot('#pin-state', 1800, 4);
+    await r.spot(null);
+    await r.click('#tab-country');
+    await page.evaluate(() => window.scrollTo(0, 0));
+    await r.caption('Load a report and pick a view as usual');
+    await r.select('#quarter', '3');
+    await r.select('#group-by', 'client');
+    await r.click('#load');
+    await status(page, '#status');
+    await r.click('#eur-view');
+    await r.snap(1400);
+    await r.caption('Each load and view change is saved, encrypted', undefined, 2000);
+    await r.caption('');
+    await r.click('#tab-options');
+    await r.scrollTo('#pin-form');
+    await r.caption('Lock now does what a restart does');
+    await r.click('#pin-lock');
+    await page.waitForSelector('#unlock-dialog[open]');
+    await r.overlay(); // the window reloaded
+    await r.caption('At start, the app asks for the PIN', 'Forgot it? The saved session is deleted and you start fresh', 2600);
+    await r.type('#unlock-pin', '2468');
+    await r.click('#unlock-submit');
+    await page.waitForFunction(() => /^Restored/.test(document.querySelector('#status')?.textContent ?? ''));
+    // The overlays were inside the (now closed) dialog: add them to the page again.
+    await page.evaluate(() => delete window.__demo);
+    await r.overlay();
+    await r.snap(600);
+    await r.spot('#query', 0, 4);
+    await r.caption('Back where you left off', 'Same dates, same view, same data: no new call to Stripe', 3000);
+    await r.spot('#status', 2400, 4);
+    await r.gif();
+
+    // Off camera: remove the PIN again.
+    await page.click('#tab-options');
+    await page.fill('#pin-current', '2468');
+    page.once('dialog', (d) => d.accept());
+    await page.click('#pin-remove');
+    await page.waitForFunction(() => document.querySelector('#pin-status')?.textContent === 'PIN removed');
   },
 };
 

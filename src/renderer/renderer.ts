@@ -1,8 +1,9 @@
-import type { CountryCurrencyRevenue, CountryTotal, ReportView, RevenueReport, ServiceTotal, StripeAnalyticsApi } from '../shared/types';
+import type { ContractorBreakdown, CountryCurrencyRevenue, CountryTotal, GroupTotal, ReportGrouping, ReportView, RevenueReport, SavedRevenue, StripeAnalyticsApi } from '../shared/types';
 import { $, countryCell, countryName, el, formatMoney, pctFmt, plural, setStatus as setStatusOn, yesterdayUtc } from './ui.js';
 import { initKeyDialog } from './key.js';
 import { initVatTab } from './vat.js';
 import { initOptionsTab } from './options.js';
+import { initSessionSaving, remember, restoreSession, setRestoreHandler, unlockAtStartup } from './session.js';
 
 declare global {
   interface Window {
@@ -21,6 +22,8 @@ function selectTab(tab: HTMLButtonElement): void {
     t.tabIndex = selected ? 0 : -1;
     document.getElementById(t.getAttribute('aria-controls')!)!.hidden = !selected;
   }
+  // Only the report tabs are worth coming back to.
+  if (tab.id !== 'tab-options') remember({ tab: tab.id });
 }
 for (const t of tabs) t.addEventListener('click', () => selectTab(t));
 $<HTMLElement>('[role="tablist"]').addEventListener('keydown', (e) => {
@@ -32,11 +35,11 @@ $<HTMLElement>('[role="tablist"]').addEventListener('keydown', (e) => {
   next.focus();
 });
 
-initVatTab(api);
+initSessionSaving(api);
+const vatTab = initVatTab(api);
 void initOptionsTab(api);
-void initKeyDialog(api);
 
-// ---- Country Revenue tab ----
+// ---- Revenue tab ----
 
 const form = $<HTMLFormElement>('#query');
 const fromInput = $<HTMLInputElement>('#from');
@@ -54,23 +57,53 @@ const eurViewBtn = $<HTMLButtonElement>('#eur-view');
 const eurTable = $<HTMLTableElement>('#eur-table');
 const eurTbody = eurTable.querySelector('tbody')!;
 const eurTfoot = eurTable.querySelector('tfoot')!;
-const serviceViewBtn = $<HTMLButtonElement>('#service-view');
-const serviceTable = $<HTMLTableElement>('#service-table');
-const serviceTbody = serviceTable.querySelector('tbody')!;
-const serviceTfoot = serviceTable.querySelector('tfoot')!;
-const serviceCurTable = $<HTMLTableElement>('#service-cur-table');
-const serviceCurTbody = serviceCurTable.querySelector('tbody')!;
-const serviceCurTfoot = serviceCurTable.querySelector('tfoot')!;
+const groupBySelect = $<HTMLSelectElement>('#group-by');
+const breakdownSelect = $<HTMLSelectElement>('#breakdown');
+const breakdownLabel = $<HTMLElement>('#breakdown-label');
+const titleEl = $<HTMLElement>('#revenue-title');
+const subEl = $<HTMLElement>('#revenue-sub');
+const countrySub = subEl.textContent;
+const groupTable = $<HTMLTableElement>('#group-table');
+const groupTbody = groupTable.querySelector('tbody')!;
+const groupTfoot = groupTable.querySelector('tfoot')!;
+const groupCurTable = $<HTMLTableElement>('#group-cur-table');
+const groupCurTbody = groupCurTable.querySelector('tbody')!;
+const groupCurTfoot = groupCurTable.querySelector('tfoot')!;
 
 type SortKey = 'country' | 'currency' | 'amount' | 'base' | 'share' | 'invoices' | 'customers';
 let report: RevenueReport | null = null;
 let sortKey: SortKey = 'amount';
 let sortAsc = false;
-// Two independent toggles: EUR (convert and sum, or keep invoice currencies) and Service (group by
-// tax code, or by country). Together they pick one of four views.
+// Two independent choices: EUR (convert and sum, or keep invoice currencies) and what to group by
+// (country, service, product or client). Together they pick one of eight views.
 let eurOn = false;
-let serviceOn = false;
-const currentView = (): ReportView => (serviceOn ? (eurOn ? 'service-eur' : 'service') : eurOn ? 'eur' : 'currency');
+let grouping: ReportGrouping = 'country';
+/** What each contractor is broken down by underneath (contractor view only). */
+let breakdown: 'country' | ContractorBreakdown = 'product';
+const currentView = (): ReportView =>
+  grouping === 'country' ? (eurOn ? 'eur' : 'currency') : eurOn ? `${grouping}-eur` : grouping;
+
+/** How each breakdown other than country is labelled. */
+interface GroupKind {
+  groups: (r: RevenueReport) => GroupTotal[];
+  /** Singular and plural, e.g. "tax code" / "tax codes". */
+  one: string;
+  many: string;
+  /** First column header. */
+  label: string;
+  /** Countries under a group only when there's more than one row to show (a client is usually in one country). */
+  collapseSingle: boolean;
+  /** Show the "% of <group>" column (meaningless for a client, who is usually one row). */
+  groupShare: boolean;
+  /** Show the key next to the name when it's a Stripe ID with this prefix. */
+  idPrefix: string;
+}
+const GROUPS: Record<Exclude<ReportGrouping, 'country'>, GroupKind> = {
+  service: { groupShare: true, groups: (r) => r.services, one: 'tax code', many: 'tax codes', label: 'Tax code · country', collapseSingle: false, idPrefix: 'txcd_' },
+  product: { groupShare: true, groups: (r) => r.products, one: 'product', many: 'products', label: 'Product · country', collapseSingle: false, idPrefix: 'prod_' },
+  client: { groupShare: false, groups: (r) => r.clients, one: 'client', many: 'clients', label: 'Client · country', collapseSingle: true, idPrefix: '' },
+  contractor: { groupShare: true, groups: (r) => r.contractors, one: 'contractor', many: 'contractors', label: 'Contractor · country', collapseSingle: false, idPrefix: '' },
+};
 
 type EurSortKey = 'country' | 'base' | 'share' | 'invoices' | 'customers' | 'currencies';
 let eurSortKey: EurSortKey = 'base';
@@ -118,21 +151,39 @@ function renderTotals(r: RevenueReport, currency: string): void {
   totalsEl.replaceChildren(mix, cards);
 }
 
-/** Service mix: each service's share of all revenue, in the base currency. */
-function renderServiceTotals(r: RevenueReport): void {
+/** A contractor's breakdown by product or client, when one is picked (and the report has it). */
+function subGroups(g: GroupTotal, kind: GroupKind): GroupTotal[] | null {
+  if (kind !== GROUPS.contractor || breakdown === 'country') return null;
+  return g.sub?.[breakdown] ?? null;
+}
+
+/** First cell of a breakdown row: the product or client, indented like a country. */
+function subNameCell(s: GroupTotal): HTMLTableCellElement {
+  return el('td', undefined, s.name);
+}
+
+/** Mix: each group's share of all revenue, in the base currency. Past the top three, the rest are "Other". */
+function renderGroupTotals(r: RevenueReport, kind: GroupKind): void {
+  const groups = kind.groups(r);
+  const top = groups.length > 4 ? groups.slice(0, 3) : groups;
+  const parts = top.map((g) => ({ name: g.name, share: g.share }));
+  if (top.length < groups.length) {
+    const rest = groups.slice(top.length);
+    parts.push({ name: `${plural(rest.length, `other ${kind.one}`, `other ${kind.many}`)}`, share: rest.reduce((n, g) => n + g.share, 0) });
+  }
   const mix = el('div', 'mix');
   const bar = el('div', 'mix-bar');
   const legend = el('div', 'mix-legend');
-  r.services.forEach((s, i) => {
+  parts.forEach((p, i) => {
     const seg = el('div', `seg c${i % 4}`);
-    seg.style.width = `${s.share * 100}%`;
-    seg.title = `${s.name} ${pctFmt.format(s.share)}`;
+    seg.style.width = `${p.share * 100}%`;
+    seg.title = `${p.name} ${pctFmt.format(p.share)}`;
     bar.append(seg);
     const item = el('span', 'item');
-    item.append(el('span', `swatch c${i % 4}`), document.createTextNode(`${s.name} ${pctFmt.format(s.share)}`));
+    item.append(el('span', `swatch c${i % 4}`), document.createTextNode(`${p.name} ${pctFmt.format(p.share)}`));
     legend.append(item);
   });
-  mix.append(el('div', 'k', `Service mix by tax code · total ≈ ${formatBase(r, r.baseTotal)}`), bar, legend);
+  mix.append(el('div', 'k', `Mix by ${kind.one} · ${plural(groups.length, kind.one, kind.many)} · total ≈ ${formatBase(r, r.baseTotal)}`), bar, legend);
   totalsEl.replaceChildren(mix);
 }
 
@@ -195,11 +246,18 @@ function renderEurTable(r: RevenueReport): void {
   markSorted(eurTable, eurSortKey, eurSortAsc);
 }
 
-function serviceNameCell(s: ServiceTotal): HTMLTableCellElement {
-  const name = el('td', undefined, s.name);
-  if (s.key.startsWith('txcd_') && s.name !== s.key) name.append(el('span', 'tag', s.key));
-  if (s.items.length) name.append(el('div', 'items', s.items.join(' · ')));
+function groupNameCell(g: GroupTotal, kind: GroupKind, collapsed: string | null): HTMLTableCellElement {
+  const name = el('td', undefined, g.name);
+  if (kind.idPrefix && g.key.startsWith(kind.idPrefix) && g.name !== g.key) name.append(el('span', 'tag', g.key));
+  // A collapsed group has no country rows: say the country here.
+  const items = collapsed ? [countryName(collapsed), ...g.items] : g.items;
+  if (items.length) name.append(el('div', 'items', items.join(' · ')));
   return name;
+}
+
+/** The one country of a group shown without country rows, or null when its rows are shown. */
+function collapsedCountry(g: GroupTotal, kind: GroupKind, rows: number): string | null {
+  return kind.collapseSingle && rows === 1 && g.countries.length === 1 ? g.countries[0].country : null;
 }
 
 /** One line per currency in a cell, e.g. "€1,200.00" and "£6.67" stacked. */
@@ -209,78 +267,132 @@ function moneyLinesCell(amounts: Array<{ amountMinor: number; currency: string; 
   return td;
 }
 
+function labelGroupTable(t: HTMLTableElement, r: RevenueReport, kind: GroupKind, baseCol: number): void {
+  t.querySelector<HTMLTableCellElement>('th.group-label')!.textContent =
+    kind === GROUPS.contractor && breakdown !== 'country' ? `Contractor · ${breakdown}` : kind.label;
+  const share = t.querySelector<HTMLTableCellElement>('th.group-share')!;
+  share.textContent = `% of ${kind.one}`;
+  // Every row has a cell in each column, so the column hides by its index.
+  for (const row of t.rows) if (row.cells[share.cellIndex]) row.cells[share.cellIndex].hidden = !kind.groupShare;
+  t.querySelector<HTMLTableCellElement>(`th:nth-child(${baseCol})`)!.textContent = `≈ ${r.baseCurrency.toUpperCase()}`;
+}
+
 /**
- * Service view in invoice currencies: one group per tax code, with a row per country and currency.
- * Amounts in different currencies are never added up; ≈ EUR is shown for comparison only.
+ * A breakdown in invoice currencies: one group per tax code, product or client, with a row per
+ * country and currency. Amounts in different currencies are never added up; ≈ EUR is for comparison only.
  */
-function renderServiceCurrencyTable(r: RevenueReport, currency: string): void {
+function renderGroupCurrencyTable(r: RevenueReport, kind: GroupKind, currency: string): void {
   const rows: HTMLTableRowElement[] = [];
   let shown = 0;
-  for (const s of r.services) {
-    const totals = s.byCurrency.filter((t) => !currency || t.currency === currency);
+  // Every share is measured in EUR: amounts in different currencies can only be compared once
+  // converted. Shares are of all revenue and of the whole group, whatever the currency filter.
+  const baseOf = (amounts: Array<{ baseAmount: number }>) => amounts.reduce((n, a) => n + a.baseAmount, 0);
+  const ofTotal = (amounts: Array<{ baseAmount: number }>) => (r.baseTotal > 0 ? baseOf(amounts) / r.baseTotal : 0);
+  for (const g of kind.groups(r)) {
+    const totals = g.byCurrency.filter((t) => !currency || t.currency === currency);
     if (!totals.length) continue;
     shown++;
-    const head = el('tr', 'service');
+    const sub = g.rows.filter((x) => !currency || x.currency === currency);
+    const collapsed = collapsedCountry(g, kind, sub.length);
+    const head = el('tr', 'group');
     head.append(
-      serviceNameCell(s),
+      groupNameCell(g, kind, collapsed),
       el('td', undefined, totals.map((t) => t.currency.toUpperCase()).join(', ')),
       moneyLinesCell(totals),
       el('td', 'num muted', formatBase(r, totals.reduce((n, t) => n + t.baseAmount, 0))),
-      el('td', 'num', pctFmt.format(1)),
+      shareCell(ofTotal(totals)),
+      el('td', 'num', pctFmt.format(g.baseAmount > 0 ? baseOf(totals) / g.baseAmount : 0)),
       el('td', 'num', String(totals.reduce((n, t) => n + t.invoiceCount, 0))),
-      el('td', 'num', currency ? String(totals[0].customerCount) : String(s.customerCount)),
+      el('td', 'num', currency ? String(totals[0].customerCount) : String(g.customerCount)),
     );
     rows.push(head);
-    const totalOf = new Map(s.byCurrency.map((t) => [t.currency, t.amountMinor]));
-    for (const x of s.rows) {
-      if (currency && x.currency !== currency) continue;
-      const tr = el('tr', 'service-country');
-      const of = totalOf.get(x.currency) ?? 0;
+    const subs = subGroups(g, kind);
+    if (subs) {
+      for (const s of subs) {
+        for (const t of s.byCurrency) {
+          if (currency && t.currency !== currency) continue;
+          const tr = el('tr', 'group-country');
+          tr.append(
+            subNameCell(s),
+            el('td', undefined, t.currency.toUpperCase()),
+            el('td', 'num', formatMoney(t.amountMinor, t.currency, t.exponent)),
+            el('td', 'num muted', formatBase(r, t.baseAmount)),
+            el('td', 'num muted', pctFmt.format(ofTotal([t]))),
+            shareCell(g.baseAmount > 0 ? t.baseAmount / g.baseAmount : 0),
+            el('td', 'num', String(t.invoiceCount)),
+            el('td', 'num', String(t.customerCount)),
+          );
+          rows.push(tr);
+        }
+      }
+      continue;
+    }
+    if (collapsed) continue;
+    for (const x of sub) {
+      const tr = el('tr', 'group-country');
       tr.append(
         countryCell(x.country),
         el('td', undefined, x.currency.toUpperCase()),
         el('td', 'num', formatMoney(x.amountMinor, x.currency, x.exponent)),
         el('td', 'num muted', formatBase(r, x.baseAmount)),
-        shareCell(of ? x.amountMinor / of : 0),
+        el('td', 'num muted', pctFmt.format(ofTotal([x]))),
+        shareCell(g.baseAmount > 0 ? x.baseAmount / g.baseAmount : 0),
         el('td', 'num', String(x.invoiceCount)),
         el('td', 'num', String(x.customerCount)),
       );
       rows.push(tr);
     }
   }
-  serviceCurTbody.replaceChildren(...rows);
+  groupCurTbody.replaceChildren(...rows);
 
   const totals = r.totalsByCurrency.filter((t) => !currency || t.currency === currency);
   const foot = el('tr');
   foot.append(
-    el('td', undefined, `Total · ${plural(shown, 'tax code')}`),
+    el('td', undefined, `Total · ${plural(shown, kind.one, kind.many)}`),
     el('td', undefined, totals.map((t) => t.currency.toUpperCase()).join(', ')),
     moneyLinesCell(totals),
     el('td', 'num muted', formatBase(r, totals.reduce((n, t) => n + t.baseAmount, 0))),
+    el('td', 'num', pctFmt.format(ofTotal(totals))),
     el('td'),
     el('td', 'num', String(totals.reduce((n, t) => n + t.invoiceCount, 0))),
     el('td'),
   );
-  serviceCurTfoot.replaceChildren(foot);
-  serviceCurTable.querySelector<HTMLTableCellElement>('th:nth-child(4)')!.textContent = `≈ ${r.baseCurrency.toUpperCase()}`;
+  groupCurTfoot.replaceChildren(foot);
+  labelGroupTable(groupCurTable, r, kind, 4);
 }
 
-/** Service view in EUR: one group per tax code (largest first), with its countries underneath. */
-function renderServiceTable(r: RevenueReport): void {
+/** A breakdown in EUR: one group per tax code, product or client (largest first), with its countries underneath. */
+function renderGroupTable(r: RevenueReport, kind: GroupKind): void {
   const rows: HTMLTableRowElement[] = [];
-  for (const s of r.services) {
-    const head = el('tr', 'service');
+  const groups = kind.groups(r);
+  for (const g of groups) {
+    const collapsed = collapsedCountry(g, kind, g.countries.length);
+    const head = el('tr', 'group');
     head.append(
-      serviceNameCell(s),
-      el('td', 'num', formatBase(r, s.baseAmount)),
-      shareCell(s.share),
+      groupNameCell(g, kind, collapsed),
+      el('td', 'num', formatBase(r, g.baseAmount)),
+      shareCell(g.share),
       el('td', 'num', pctFmt.format(1)),
-      el('td', 'num', String(s.invoiceCount)),
-      el('td', 'num', String(s.customerCount)),
+      el('td', 'num', String(g.invoiceCount)),
+      el('td', 'num', String(g.customerCount)),
     );
     rows.push(head);
-    for (const c of s.countries) {
-      const tr = el('tr', 'service-country');
+    const subs = subGroups(g, kind);
+    for (const s of subs ?? []) {
+      const tr = el('tr', 'group-country');
+      tr.append(
+        subNameCell(s),
+        el('td', 'num', formatBase(r, s.baseAmount)),
+        el('td', 'num muted', pctFmt.format(r.baseTotal > 0 ? s.baseAmount / r.baseTotal : 0)),
+        shareCell(s.share),
+        el('td', 'num', String(s.invoiceCount)),
+        el('td', 'num', String(s.customerCount)),
+      );
+      rows.push(tr);
+    }
+    if (subs || collapsed) continue;
+    for (const c of g.countries) {
+      const tr = el('tr', 'group-country');
       tr.append(
         countryCell(c.country),
         el('td', 'num', formatBase(r, c.baseAmount)),
@@ -292,43 +404,56 @@ function renderServiceTable(r: RevenueReport): void {
       rows.push(tr);
     }
   }
-  serviceTbody.replaceChildren(...rows);
+  groupTbody.replaceChildren(...rows);
 
   const foot = el('tr');
   foot.append(
-    el('td', undefined, `Total · ${plural(r.services.length, 'tax code')}`),
+    el('td', undefined, `Total · ${plural(groups.length, kind.one, kind.many)}`),
     el('td', 'num', formatBase(r, r.baseTotal)),
     el('td', 'num', pctFmt.format(r.baseTotal > 0 ? 1 : 0)),
     el('td'),
-    // An invoice with lines for two services counts once in each, so count invoices, not rows.
+    // An invoice split across two groups counts once in each, so count invoices, not rows.
     el('td', 'num', String(r.countries.reduce((n, c) => n + c.invoiceCount, 0))),
     el('td'),
   );
-  serviceTfoot.replaceChildren(foot);
-  serviceTable.querySelector<HTMLTableCellElement>('th:nth-child(2)')!.textContent = `≈ ${r.baseCurrency.toUpperCase()}`;
+  groupTfoot.replaceChildren(foot);
+  labelGroupTable(groupTable, r, kind, 2);
+}
+
+/** Remembers the Revenue tab for the last session. */
+function rememberRevenue(): void {
+  if (!report) return;
+  const form = { from: fromInput.value, to: toInput.value, quarter: quarterSelect.value, year: yearSelect.value, currency: currencySelect.value, grouping, eur: eurOn, breakdown };
+  remember({ revenue: { form, report } });
 }
 
 function render(): void {
+  const kind = grouping === 'country' ? null : GROUPS[grouping];
+  titleEl.textContent = `Revenue by ${grouping}`;
+  breakdownLabel.hidden = grouping !== 'contractor';
+  subEl.textContent = kind ? `Paid invoices, per ${kind.one}, split by customer country and invoice currency.` : countrySub;
   if (!report) return;
   const view = currentView();
   eurViewBtn.setAttribute('aria-pressed', String(eurOn));
-  serviceViewBtn.setAttribute('aria-pressed', String(serviceOn));
   // The currency filter applies whenever amounts are in invoice currencies.
   currencySelect.disabled = eurOn;
   table.hidden = view !== 'currency';
   eurTable.hidden = view !== 'eur';
-  serviceCurTable.hidden = view !== 'service';
-  serviceTable.hidden = view !== 'service-eur';
-  if (view === 'eur') {
-    renderEurTable(report);
-    renderTotals(report, '');
-  } else if (view === 'service-eur') {
-    renderServiceTable(report);
-    renderServiceTotals(report);
-  } else if (view === 'service') {
-    renderServiceCurrencyTable(report, currencySelect.value);
+  groupCurTable.hidden = !kind || eurOn;
+  groupTable.hidden = !kind || !eurOn;
+  if (!kind) {
+    if (eurOn) {
+      renderEurTable(report);
+      renderTotals(report, '');
+    } else renderTable();
+  } else if (eurOn) {
+    renderGroupTable(report, kind);
+    renderGroupTotals(report, kind);
+  } else {
+    renderGroupCurrencyTable(report, kind, currencySelect.value);
     renderTotals(report, currencySelect.value);
-  } else renderTable();
+  }
+  rememberRevenue();
 }
 
 function renderTable(): void {
@@ -380,7 +505,8 @@ function renderMeta(r: RevenueReport): void {
     `Country from customer address: ${s.customerAddress}, invoice snapshot: ${s.invoiceSnapshot}, ` +
     `shipping: ${s.shipping}, unknown: ${s.unknown}. ` +
     `Conversion to ${r.baseCurrency.toUpperCase()}: ${r.fxSource}. ` +
-    `Services: each invoice is split across its line items by net amount, by the product's tax code (else the account default).` +
+    `Services and products: each invoice is split across its line items by net amount; services by the product's tax code (else the account default). ` +
+    `Clients: whole invoices per customer. Contractors: the products assigned to them in Options.` +
     (r.servicesNote ? ` ${r.servicesNote}` : '');
 }
 
@@ -462,7 +588,6 @@ form.addEventListener('submit', async (e) => {
   loadBtn.disabled = true;
   exportBtn.disabled = true;
   eurViewBtn.disabled = true;
-  serviceViewBtn.disabled = true;
   setStatus('Fetching…');
   loading = true;
   const res = await api.revenueByCountry({ from: fromInput.value || undefined, to: toInput.value || undefined });
@@ -471,7 +596,7 @@ form.addEventListener('submit', async (e) => {
   if (!res.ok) {
     setStatus(res.error, true);
     // Keep the previous report usable.
-    exportBtn.disabled = eurViewBtn.disabled = serviceViewBtn.disabled = !report;
+    exportBtn.disabled = eurViewBtn.disabled = !report;
     return;
   }
   report = res.value;
@@ -480,7 +605,6 @@ form.addEventListener('submit', async (e) => {
   renderMeta(report);
   exportBtn.disabled = false;
   eurViewBtn.disabled = false;
-  serviceViewBtn.disabled = false;
   setStatus(`Loaded ${report.invoicesScanned} invoices`);
 });
 
@@ -490,8 +614,12 @@ eurViewBtn.addEventListener('click', () => {
   eurOn = !eurOn;
   render();
 });
-serviceViewBtn.addEventListener('click', () => {
-  serviceOn = !serviceOn;
+breakdownSelect.addEventListener('change', () => {
+  breakdown = breakdownSelect.value as typeof breakdown;
+  render();
+});
+groupBySelect.addEventListener('change', () => {
+  grouping = groupBySelect.value as ReportGrouping;
   render();
 });
 
@@ -519,9 +647,66 @@ table.querySelector('thead')!.addEventListener('click', (e) => {
   renderTable();
 });
 
+/** Puts back the Revenue tab from the last session: the form, the view and the report. */
+function restoreRevenue(saved: SavedRevenue): void {
+  const f = saved.form;
+  fromInput.value = f.from;
+  toInput.value = f.to;
+  if ([...yearSelect.options].some((o) => o.value === f.year)) yearSelect.value = f.year;
+  updateQuarterOptions();
+  quarterSelect.value = f.quarter;
+  if (quarterSelect.value !== f.quarter) quarterSelect.value = '';
+  grouping = f.grouping in GROUPS || f.grouping === 'country' ? f.grouping : 'country';
+  groupBySelect.value = grouping;
+  breakdown = f.breakdown === 'country' || f.breakdown === 'client' ? f.breakdown : 'product';
+  breakdownSelect.value = breakdown;
+  eurOn = !!f.eur;
+  report = saved.report;
+  populateCurrencies(report);
+  currencySelect.value = report.totalsByCurrency.some((t) => t.currency === f.currency) ? f.currency : '';
+  render();
+  renderMeta(report);
+  exportBtn.disabled = eurViewBtn.disabled = false;
+  setStatus(`Restored the last session: ${report.invoicesScanned} invoices loaded ${new Date(report.generatedAt).toLocaleString()}`);
+}
+
+/** Contractors worked out again for the current assignments, on the report already loaded. */
+async function regroupContractors(): Promise<void> {
+  const before = report;
+  if (!before) return;
+  const res = await api.regroupContractors(before);
+  // A newer load replaced the report meanwhile: keep that one.
+  if (!res.ok || report !== before) return;
+  report = res.value;
+  render();
+}
+window.addEventListener('settings-saved', () => void regroupContractors());
+
+setRestoreHandler((saved) => {
+  try {
+    if (saved.revenue) {
+      restoreRevenue(saved.revenue);
+      // Assignments may have changed since the session was saved.
+      void regroupContractors();
+    }
+    if (saved.vat) vatTab.restore(saved.vat);
+    const tab = tabs.find((t) => t.id === saved.tab);
+    if (tab) selectTab(tab);
+  } catch (e) {
+    setStatus(`The last session could not be restored: ${e instanceof Error ? e.message : String(e)}`, true);
+  }
+});
+
+// Startup: the PIN first (it may unlock the Stripe key), then the key dialog if there's still no key.
+void (async () => {
+  const saved = await unlockAtStartup();
+  if (saved) restoreSession(saved);
+  await initKeyDialog(api);
+})();
+
 exportBtn.addEventListener('click', async () => {
   if (!report) return;
-  const res = await api.exportCsv(report, currentView());
+  const res = await api.exportCsv(report, currentView(), breakdown);
   if (!res.ok) setStatus(res.error, true);
   else if (res.value) setStatus(`Exported to ${res.value}`);
 });

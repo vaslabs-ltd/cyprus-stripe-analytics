@@ -1,6 +1,6 @@
 import Stripe from 'stripe';
-import type { FetchScope, InvoiceStatus, Progress, RevenueQuery, RevenueReport, VatFetchSettings, VatQuery, VatReport } from '../shared/types';
-import { NO_TAX_CODE, RevenueAggregator, toMajorUnits, UNKNOWN_TAX_CODE, type Classify, type InvoiceFact, type LineFact } from './analytics';
+import type { FetchScope, InvoiceStatus, ProductInfo, Progress, RevenueQuery, RevenueReport, VatFetchSettings, VatQuery, VatReport } from '../shared/types';
+import { lineItem, NO_CONTRACTORS, NO_TAX_CODE, RevenueAggregator, type ContractorMap, toMajorUnits, UNKNOWN_TAX_CODE, type Classify, type InvoiceFact, type LineFact } from './analytics';
 import { assertSupportedCurrency, BASE_CURRENCY, FX_SOURCE, isoDate, type FxRateStore } from './fx';
 import { buildVatReport, type VatInvoiceFact } from './vat';
 import { DEFAULT_SETTINGS, INVOICE_STATUSES } from './settings';
@@ -62,6 +62,8 @@ export interface LineItemLike {
 export interface ProductLike {
   id: string;
   name: string;
+  /** False for archived products. */
+  active?: boolean;
   tax_code?: string | { id: string } | null;
 }
 
@@ -151,7 +153,7 @@ async function taxCodeClassifier(services: ServiceSource, lines: LineFact[]): Pr
       }
     } catch (e) {
       productsOk = false;
-      notes.push(`Products could not be read (${errorText(e)}): give the key Read access to Products to see tax codes.`);
+      notes.push(`Products could not be read (${errorText(e)}): give the key Read access to Products to see tax codes and product names.`);
     }
   }
   const productOf = (l: LineFact) => (l.product ? products.get(l.product) : undefined);
@@ -169,10 +171,11 @@ async function taxCodeClassifier(services: ServiceSource, lines: LineFact[]): Pr
 
   const classify: Classify = (l) => {
     const p = productOf(l);
-    const item = p?.name ?? ((l.description ?? '').trim() || l.product || 'Line without a description');
-    if (!productsOk && l.product) return { service: UNKNOWN_TAX_CODE, item };
-    if (p?.taxCode) return { service: p.taxCode, item };
-    return { service: fallback, item: fallback.startsWith('txcd_') ? `${item} (account default)` : item };
+    const item = p?.name ?? lineItem(l);
+    const product = { product: l.product ?? undefined, productName: item };
+    if (!productsOk && l.product) return { service: UNKNOWN_TAX_CODE, item, ...product };
+    if (p?.taxCode) return { service: p.taxCode, item, ...product };
+    return { service: fallback, item: fallback.startsWith('txcd_') ? `${item} (account default)` : item, ...product };
   };
   return { classify, notes };
 }
@@ -196,6 +199,7 @@ function toFact(inv: InvoiceLike): InvoiceFact {
   const customerId = typeof c === 'string' ? c : (c?.id ?? null);
   return {
     customerId,
+    customerName: inv.customer_name ?? customer?.name ?? inv.customer_email ?? customer?.email ?? null,
     currency: inv.currency,
     amountPaid: inv.amount_paid,
     paidDate: isoDate((inv.status_transitions?.paid_at ?? inv.created) * 1000),
@@ -217,6 +221,7 @@ export async function revenueByCountry(
   query: RevenueQuery,
   onProgress: (p: Progress) => void,
   services: ServiceSource = NO_SERVICES,
+  contractors: ContractorMap = NO_CONTRACTORS,
 ): Promise<RevenueReport> {
   // Reports cover complete past days only: always end at yesterday 23:59:59 UTC at the latest.
   const yesterday = isoDate(Date.now() - 86_400_000);
@@ -245,7 +250,7 @@ export async function revenueByCountry(
     services,
     facts.flatMap((f) => f.lines ?? []),
   );
-  const agg = new RevenueAggregator(BASE_CURRENCY, FX_SOURCE, classify);
+  const agg = new RevenueAggregator(BASE_CURRENCY, FX_SOURCE, classify, contractors);
   for (const f of facts) {
     // An invoice created before the cut-off but paid today can't be converted yet: leave it out.
     if (f.paidDate > yesterday) continue;
@@ -257,6 +262,17 @@ export async function revenueByCountry(
   const report = agg.report(query, names);
   if (notes.length) report.servicesNote = notes.join(' ');
   return report;
+}
+
+/** All products for Options: active first, then archived, each by name. */
+export async function listProducts(services: ServiceSource): Promise<ProductInfo[]> {
+  const out: ProductInfo[] = [];
+  try {
+    for await (const p of services.products()) out.push({ id: p.id, name: p.name, active: p.active !== false });
+  } catch (e) {
+    throw new Error(`Products could not be read (${errorText(e)}): give the key Read access to Products.`);
+  }
+  return out.sort((a, b) => Number(b.active) - Number(a.active) || a.name.localeCompare(b.name) || a.id.localeCompare(b.id));
 }
 
 /** For callers without line items or products: every invoice is reported as not split. */

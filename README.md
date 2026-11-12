@@ -9,7 +9,7 @@ your Stripe invoices, using a read-only key.
 Stripe, built this for two recurring filings:
 
 1. **Central Bank statistics.** Each calendar quarter, the Central Bank of Cyprus collects the
-   Services Survey (QSRVS) through its EDX e-business platform. The **Country Revenue** tab gives
+   Services Survey (QSRVS) through its EDX e-business platform. The **Revenue** tab gives
    the revenue side of it, paid invoice totals per customer country and currency for the
    quarter, with a EUR view, a currency mix and a service view (revenue per Stripe tax code, by
    country), since the survey asks for each type of service separately.
@@ -18,6 +18,9 @@ Stripe, built this for two recurring filings:
    international, and flags invoices whose tax treatment looks wrong. Cyprus VAT quarters have
    traditionally been staggered (Mar–May, Jun–Aug, Sep–Nov, Dec–Feb) and are moving to calendar
    quarters, so the tab supports both.
+
+The same tab also breaks revenue down **per product**, **per client** and **per contractor** (products
+assigned to people in Options), in the invoice currencies or converted to EUR.
 
 It's published as-is in case it helps someone with the same setup. It assumes a Cyprus VAT
 registration and supports only EUR, GBP and USD invoices; other setups will need changes.
@@ -47,6 +50,10 @@ never saved:
   app goes back to the real key. A `STRIPE_PASSKEY=rk_demo` in a `.env` file or the environment is
   ignored.
 - The generated invoices only exist in memory.
+- Changes on the Options tab (including contractors) are kept in memory too, starting from the
+  saved VAT options with no contractors; `settings.json` isn't touched.
+- A PIN set in demo mode, and the demo session it encrypts, are kept in memory only and never
+  touch a real saved session.
 - Exchange rates for demo reports use a separate cache, `demo/fx-rates.csv` in the cache folder
   below (seeded from the bundled file), so they never mix with the real one.
 - CSV exports are named `demo-…csv` by default.
@@ -58,9 +65,9 @@ on screen.
 
 The app has one tab per report.
 
-### Country Revenue (Central Bank Services Survey, QSRVS)
+### Revenue by country (Central Bank Services Survey, QSRVS)
 
-![Loading a quarter, sorting and filtering by currency on the Country Revenue tab](docs/gifs/country-revenue.gif)
+![Loading a quarter, sorting and filtering by currency on the Revenue tab](docs/gifs/country-revenue.gif)
 
 Sum of `amount_paid` across invoices with status `paid`, grouped by **customer country** and **invoice currency**.
 Currencies are never converted or mixed.
@@ -86,16 +93,22 @@ Only **EUR, GBP and USD** are supported; an invoice in any other currency stops 
 The **EUR view** button switches the table to one row per country, with every currency converted
 to EUR and summed (≈ EUR, % of total, invoices, distinct customers, currencies paid in).
 Export CSV exports whichever view is showing. The currency filter doesn't apply in this view.
-EUR view and Service view are separate toggles and can be combined (see below).
+EUR view combines with every **Group by** choice (see below).
 
 ### Service view
 
 ![The service view: service mix, each service split by country, and CSV export](docs/gifs/service-view.gif)
 
-The **Service view** button groups revenue by service, with each service split by country. On its
+**Group by** picks what the table groups revenue by: **Country** (the views above), **Service
+(tax code)**, **Product**, **Client** or **Contractor**. The last four share one layout, and **EUR view** works
+with each of them. Grouping by service splits each service by country. On its
 own it keeps the **invoice currencies**: a row per country and currency, with revenue in that
-currency, ≈ EUR for comparison, % of the service's total in that currency, invoices and customers;
-the currency filter applies. Turn on **EUR view** as well to convert everything to EUR and get one
+currency, ≈ EUR for comparison, % of total, % of the service, invoices and customers; the
+currency filter applies. Percentages are always measured on the ≈ EUR amounts, since different
+currencies can only be compared once converted: **% of total** is the share of all revenue, and
+**% of the service** is the row's share of the service's whole revenue, across all its currencies
+(so a service paid mostly in EUR and a little in GBP shows the GBP row as a small share, not 100%).
+With a currency selected, the percentages still refer to all revenue and the whole service. Turn on **EUR view** as well to convert everything to EUR and get one
 row per country under each service (≈ EUR, % of total, % of the service). A service is a Stripe
 **tax code** (e.g. "Software as a service (SaaS) - business use", "General - Services"): the tax
 code set on the product, else the account's default tax code from Tax settings. Each group lists
@@ -103,15 +116,69 @@ the products billed under it, marked "(account default)" when the code came from
 Each paid invoice is split across its line items in proportion to their net amounts (after
 discounts, before tax), in whole cents, so the services add up exactly to the same totals as the
 country views, per currency. An invoice with lines under two tax codes counts once in each.
+The same columns appear for products, clients and contractors below. Every grouped CSV ends with
+the group's share of all revenue (e.g. `client_share_of_total`), repeated on each of its rows.
 Export CSV writes the view that's showing: one row per tax code, country and currency
-(`service,tax_code,country,currency,revenue,revenue_minor_units,revenue_eur,invoices,customers`),
+(`service,tax_code,country,currency,revenue,revenue_minor_units,revenue_eur,invoices,customers,service_share_of_total`),
 or with EUR view on, one row per tax code and country
-(`service,tax_code,country,revenue_eur,share_of_service,share_of_total,invoices,customers`).
+(`service,tax_code,country,revenue_eur,share_of_service,share_of_total,invoices,customers,service_share_of_total`).
 
 Stripe keeps tax codes on products, not on invoices, so this view needs **Read** access to
 **Products** and **Tax settings** on the key. Without them the report still loads, with the
 codes it couldn't read shown as "Tax code unknown" and a note under the table saying which
 permission is missing.
+
+### Product view
+
+![The product view: revenue per Stripe product, by country, in invoice currencies and EUR](docs/gifs/product-view.gif)
+
+**Group by → Product** shows revenue per Stripe **product**, each split by country. Like the
+service view, each paid invoice is split across its line items by net amount, in whole cents, so
+the products add up exactly to the per-currency totals; lines without a product are grouped by
+their description, and invoices without line items show as "Not split". In invoice currencies
+there's a row per country and currency (the currency filter applies); with **EUR view** on,
+products are converted, summed and shown with a product mix bar. Export CSV writes
+`product,product_id,country,currency,revenue,revenue_minor_units,revenue_eur,invoices,customers,product_share_of_total`,
+or with EUR view on `product,product_id,country,revenue_eur,share_of_product,share_of_total,invoices,customers,product_share_of_total`.
+Product names need **Read** access to **Products**; without it products show by their line
+description.
+
+### Client view
+
+![The client view: revenue per customer, in invoice currencies and EUR](docs/gifs/client-view.gif)
+
+**Group by → Client** shows revenue per Stripe **customer** (the name on the invoice, else the
+customer's name or email), largest first, with the customer's country and the products they paid
+for. Invoices are counted whole, not split. A client paying in more than one currency, or from
+more than one country, gets a row for each underneath. In invoice currencies the currency filter
+applies; with **EUR view** on, every client is converted to EUR and ranked, and the mix bar shows
+the top clients with the rest grouped together. Export CSV writes
+`client,customer_id,country,currency,revenue,revenue_minor_units,revenue_eur,invoices,customers,client_share_of_total`,
+or with EUR view on `client,customer_id,country,revenue_eur,share_of_total,invoices,customers,client_share_of_total`.
+There's no "% of client" column: a client is almost always a single row.
+
+### Contractor view
+
+![Adding contractors, assigning products to them, and the contractor view](docs/gifs/contractors.gif)
+
+On the **Options** tab, add contractors and assign each Stripe product to one of them. The
+product list (active products first, then archived ones) is loaded from Stripe the first time the
+tab is opened; **Reload products from Stripe** refreshes it. The names of assigned products are
+saved with the assignments, so they show even before the list loads. **Group by → Contractor**
+then shows revenue per contractor: each paid invoice is split across its line items by net amount,
+as in the product view, and each line goes to the contractor its product is assigned to. Lines
+whose product isn't assigned, or that have no product, show as **Unassigned**, so the contractors
+still add up to the same totals. Each contractor lists the products behind their revenue. **Break down by** (shown only in this
+view) picks what's underneath each contractor, one at a time: **Product** (the default), **Client**
+or **Country**, each with its share of the contractor (in EUR). Per client, an invoice counts once
+however many of the contractor's products are on it. EUR view and the currency filter work as in
+the other views. Export CSV writes
+`contractor,products,product,currency,revenue,revenue_minor_units,revenue_eur,invoices,customers,contractor_share_of_total`,
+or with EUR view on `contractor,products,product,revenue_eur,share_of_contractor,share_of_total,invoices,customers,contractor_share_of_total`.
+The third column follows **Break down by** (`product`, `client` or `country`).
+Changing an assignment regroups the report that's already loaded (and a restored session)
+straight away, without calling Stripe again: the report keeps each invoice's split by product. Listing products needs
+**Read** access to **Products**.
 
 ### Currency mix
 To compare currencies, each invoice is converted to **EUR** at the ECB reference rate on its
@@ -183,14 +250,48 @@ quarter (finalized late), and/or created after it up to yesterday (back-dated in
 picks the invoice statuses to include: paid, open and uncollectible by default; draft and void only
 to look for mistakes (they're flagged, but counted in the totals). Changes are saved straight away
 to `settings.json` in the config folder (see [Stripe key](#stripe-key-read-only)), and the VAT
-report's footer says which window and statuses it searched.
+report's footer says which window and statuses it searched. **Reset to defaults** resets the VAT
+search only. The same tab holds the contractors and product assignments for the
+[contractor view](#contractor-view).
+
+### Last session (PIN)
+
+![Setting a PIN, locking, and unlocking back into the last session](docs/gifs/session.gif)
+
+With a PIN set (Options → **Last session**, 4–8 digits), the app keeps the reports you last
+loaded, with their dates, filters, grouping, EUR view and the tab you were on, and restores
+them when it starts again, after you enter the PIN. Nothing is fetched from Stripe to do that.
+The session is saved after every load and view change. Without a PIN nothing is kept.
+
+- **Encryption.** Setting the PIN creates an X25519 key pair. Each saved session is sealed to the
+  public key (ephemeral ECDH, HKDF-SHA256, AES-256-GCM), so saving never needs the PIN. The
+  private key is sealed with a key derived (scrypt) from the **PIN together with the Stripe key**,
+  so opening the session needs both. The PIN itself isn't stored anywhere.
+- **Encrypting the Stripe key too** (optional checkbox). The key is sealed with the PIN alone and
+  removed from the `.env` file, and the PIN is asked for at every start to unlock it. This only
+  works for a key the app saved itself. A key read from the `STRIPE_PASSKEY` environment
+  variable or another `.env` file would leave a plain copy behind, so the app refuses.
+  Unticking it writes the key back to `.env`.
+- **At start**, the app asks for the PIN only when there's something to unlock: a saved session
+  or an encrypted key. **Not now** skips it (the key dialog then offers to unlock later), and
+  **Forgot PIN…** deletes the PIN, the session and an encrypted key, so the app starts fresh.
+- **Lock now** forgets the PIN until it's entered again, as a restart would.
+- Changing the PIN, the checkbox or removing the PIN needs the current PIN. Entering a new
+  Stripe key deletes the saved session (it belonged to the old key). The PIN is kept, re-encrypted
+  for the new key, if it was entered since the app started; otherwise it's removed.
+
+The files are `session-lock.json` and `last-session.json` in the config folder (see
+[Stripe key](#stripe-key-read-only)), readable only by you. A 4–8 digit PIN keeps them from being
+read casually, but scrypt only slows guessing down: someone with a copy of the files and enough
+time could try every PIN, and if the Stripe key is encrypted as well, everything rests on the PIN.
 
 ## Stripe key (read-only)
 
 Create a **restricted key** in the Stripe Dashboard → Developers → API keys, with **Read** access to:
 - Invoices
 - Customers
-- Products and Tax settings (optional: tax codes for the service view)
+- Products and Tax settings (optional: product names, the product list for contractors, and tax
+  codes for the service view)
 
 The app won't start a query with a standard `sk_` secret key; it accepts only `rk_` restricted keys.
 
@@ -201,7 +302,8 @@ one). It checks the key with one read call each to Invoices and Customers, then 
 - Windows: `%APPDATA%\vaslabs-ltd\stripe-analytics\.env`
 
 as `STRIPE_PASSKEY=rk_...`, readable only by you (mode 600 on Linux). The **Stripe key…** button
-replaces it. You can also write that file yourself.
+replaces it. You can also write that file yourself. It can be kept encrypted with a PIN instead
+(see [Last session](#last-session-pin)).
 
 The key is read from the first of these that exists: `.env` in the current directory (handy for
 `npm start`), the file above, then the old location (`~/.config/Stripe Analytics/.env`).
