@@ -69,8 +69,8 @@ The app has one tab per report.
 
 ![Loading a quarter, sorting and filtering by currency on the Revenue tab](docs/gifs/country-revenue.gif)
 
-Sum of `amount_paid` across invoices with status `paid`, grouped by **customer country** and **invoice currency**.
-Currencies are never converted or mixed.
+Sum of what was paid (`amount_paid`) across invoices with status `paid`, **excluding VAT**, grouped
+by **customer country** and **invoice currency**. Currencies are never converted or mixed.
 
 The country comes from the first one of these that is set:
 1. the customer's billing address (`customer.address.country`)
@@ -85,6 +85,19 @@ Not counted: refunds, credit notes, and invoices that are only partly paid (`ope
 Reports cover complete past days only (UTC): they always end at yesterday at the latest.
 
 Only **EUR, GBP and USD** are supported; an invoice in any other currency stops the report with an error.
+
+### VAT
+
+Revenue is shown **without VAT** by default: each invoice's paid amount is multiplied by its net
+share of the invoice total (`total` minus `total_taxes`), in whole cents, so a partly credited
+invoice keeps its proportions. In the product, service and contractor views each line then gets
+exactly its own net amount, even when an invoice mixes VAT rates. The **Incl. VAT** button shows
+the amounts with the VAT paid included instead, in every view. Like EUR view, it switches straight
+away (both versions are worked out when the report loads), and the subtitle says which one is
+showing. CSV exports with VAT included are named `…-incl-vat-….csv`. Only invoices that carry VAT
+differ (mainly customers in Cyprus); EU reverse-charge and international invoices have none.
+A session saved by an older version has VAT included and no version without it: load it again to
+switch.
 
 ### EUR view and export
 

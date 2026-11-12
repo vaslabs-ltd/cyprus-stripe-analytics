@@ -193,6 +193,16 @@ async function taxCodeNames(services: ServiceSource, ids: string[]): Promise<{ n
   return { names, note: failed && `Some tax code names could not be read (${failed}); those show by ID.` };
 }
 
+/**
+ * The part of what was paid that isn't VAT: the paid amount scaled by the invoice's net share of its
+ * total (so a partly credited invoice keeps its proportions), in whole minor units.
+ */
+export function paidExcludingTax(inv: Pick<InvoiceLike, 'amount_paid' | 'total' | 'total_taxes'>): number {
+  const tax = (inv.total_taxes ?? []).reduce((sum, t) => sum + t.amount, 0);
+  if (!tax || inv.total <= 0) return inv.amount_paid;
+  return Math.round((inv.amount_paid * (inv.total - tax)) / inv.total);
+}
+
 function toFact(inv: InvoiceLike): InvoiceFact {
   const c = inv.customer;
   const customer = expandedCustomer(c);
@@ -202,6 +212,7 @@ function toFact(inv: InvoiceLike): InvoiceFact {
     customerName: inv.customer_name ?? customer?.name ?? inv.customer_email ?? customer?.email ?? null,
     currency: inv.currency,
     amountPaid: inv.amount_paid,
+    amountPaidExclTax: paidExcludingTax(inv),
     paidDate: isoDate((inv.status_transitions?.paid_at ?? inv.created) * 1000),
     customerCountry: customer?.address?.country,
     invoiceCountry: inv.customer_address?.country,
@@ -250,17 +261,22 @@ export async function revenueByCountry(
     services,
     facts.flatMap((f) => f.lines ?? []),
   );
-  const agg = new RevenueAggregator(BASE_CURRENCY, FX_SOURCE, classify, contractors);
+  // Two reports from the same invoices: without VAT (the default view) and with it.
+  const net = new RevenueAggregator(BASE_CURRENCY, FX_SOURCE, classify, contractors);
+  const gross = new RevenueAggregator(BASE_CURRENCY, FX_SOURCE, classify, contractors);
   for (const f of facts) {
     // An invoice created before the cut-off but paid today can't be converted yet: leave it out.
     if (f.paidDate > yesterday) continue;
-    agg.add(f, toMajorUnits(f.amountPaid, f.currency) / fx.rate(f.currency, f.paidDate));
+    const rate = fx.rate(f.currency, f.paidDate);
+    const exclTax = { ...f, amountPaid: f.amountPaidExclTax ?? f.amountPaid };
+    net.add(exclTax, toMajorUnits(exclTax.amountPaid, f.currency) / rate);
+    gross.add(f, toMajorUnits(f.amountPaid, f.currency) / rate);
   }
-  const codes = [...new Set(agg.serviceKeys())].filter((k) => k.startsWith('txcd_'));
+  const codes = [...new Set(net.serviceKeys())].filter((k) => k.startsWith('txcd_'));
   const { names, note } = await taxCodeNames(services, codes);
   if (note) notes.push(note);
-  const report = agg.report(query, names);
-  if (notes.length) report.servicesNote = notes.join(' ');
+  const report: RevenueReport = { ...net.report(query, names), vat: 'excluded', withVat: { ...gross.report(query, names), vat: 'included' } };
+  if (notes.length) report.servicesNote = report.withVat!.servicesNote = notes.join(' ');
   return report;
 }
 

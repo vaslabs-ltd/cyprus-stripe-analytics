@@ -315,6 +315,9 @@ test('contractors are regrouped from the loaded report when assignments change, 
   assert.equal(after.products, before.products);
   const old = { ...before, productParts: undefined };
   assert.equal(regroupContractors(old, { names, byProduct: moved }), old);
+  // The VAT-included report inside is regrouped too.
+  const both = regroupContractors({ ...before, withVat: before }, { names, byProduct: moved });
+  assert.deepEqual(both.withVat!.contractors, after.contractors);
 });
 
 test('contractor breakdown by product and by client, with shares of the contractor and CSV', () => {

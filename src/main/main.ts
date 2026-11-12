@@ -271,7 +271,7 @@ ipcMain.handle('export-csv', (event, report: RevenueReport, view: ReportView, br
     return saveCsv(
       event.sender,
       `Export revenue by ${what.replace(/-/g, ' ')}`,
-      `${demo ? 'demo-' : ''}revenue-by-${what}${eur ? '-eur' : ''}-${new Date().toISOString().slice(0, 10)}.csv`,
+      `${demo ? 'demo-' : ''}revenue-by-${what}${eur ? '-eur' : ''}${report.vat === 'excluded' ? '' : '-incl-vat'}-${new Date().toISOString().slice(0, 10)}.csv`,
       () => reportToCsv(report, view, by),
     );
   }),

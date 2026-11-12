@@ -158,6 +158,13 @@ export interface RevenueReport {
   countrySources: { customerAddress: number; invoiceSnapshot: number; shipping: number; unknown: number };
   generatedAt: string;
   query: RevenueQuery;
+  /**
+   * Whether amounts include VAT. Missing in sessions saved by older versions, whose amounts
+   * include it.
+   */
+  vat?: 'excluded' | 'included';
+  /** The same report with VAT included (on the report without VAT, which is the default view). */
+  withVat?: RevenueReport;
 }
 
 export interface Progress {
@@ -339,7 +346,7 @@ export interface SessionStatus {
 
 /** What the Revenue tab showed: the form, the view and the report. */
 export interface SavedRevenue {
-  form: { from: string; to: string; quarter: string; year: string; currency: string; grouping: ReportGrouping; eur: boolean; breakdown?: 'country' | ContractorBreakdown };
+  form: { from: string; to: string; quarter: string; year: string; currency: string; grouping: ReportGrouping; eur: boolean; breakdown?: 'country' | ContractorBreakdown; vat?: boolean };
   report: RevenueReport;
 }
 

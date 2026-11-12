@@ -54,6 +54,7 @@ const tbody = table.querySelector('tbody')!;
 const baseTh = table.querySelector<HTMLTableCellElement>('th[data-sort="base"]')!;
 const metaEl = $<HTMLElement>('#meta');
 const eurViewBtn = $<HTMLButtonElement>('#eur-view');
+const vatBtn = $<HTMLButtonElement>('#vat-toggle');
 const eurTable = $<HTMLTableElement>('#eur-table');
 const eurTbody = eurTable.querySelector('tbody')!;
 const eurTfoot = eurTable.querySelector('tfoot')!;
@@ -71,7 +72,21 @@ const groupCurTbody = groupCurTable.querySelector('tbody')!;
 const groupCurTfoot = groupCurTable.querySelector('tfoot')!;
 
 type SortKey = 'country' | 'currency' | 'amount' | 'base' | 'share' | 'invoices' | 'customers';
+/** The report as loaded: without VAT, with the VAT-included version inside it (`withVat`). */
+let loaded: RevenueReport | null = null;
+/** The report on screen: `loaded`, or its VAT-included version. */
 let report: RevenueReport | null = null;
+/** Include VAT in the amounts (off by default: revenue is shown without VAT). */
+let vatOn = false;
+
+/** Reports saved by older versions have no `vat` and include VAT, with no version without it. */
+const onlyWithVat = (r: RevenueReport) => !r.vat && !r.withVat;
+
+/** Sets the loaded report; returns the one to show. */
+function showLoaded(r: RevenueReport): RevenueReport {
+  loaded = r;
+  return (report = onlyWithVat(r) ? r : vatOn ? (r.withVat ?? r) : r);
+}
 let sortKey: SortKey = 'amount';
 let sortAsc = false;
 // Two independent choices: EUR (convert and sum, or keep invoice currencies) and what to group by
@@ -422,9 +437,9 @@ function renderGroupTable(r: RevenueReport, kind: GroupKind): void {
 
 /** Remembers the Revenue tab for the last session. */
 function rememberRevenue(): void {
-  if (!report) return;
-  const form = { from: fromInput.value, to: toInput.value, quarter: quarterSelect.value, year: yearSelect.value, currency: currencySelect.value, grouping, eur: eurOn, breakdown };
-  remember({ revenue: { form, report } });
+  if (!loaded) return;
+  const form = { from: fromInput.value, to: toInput.value, quarter: quarterSelect.value, year: yearSelect.value, currency: currencySelect.value, grouping, eur: eurOn, breakdown, vat: vatOn };
+  remember({ revenue: { form, report: loaded } });
 }
 
 function render(): void {
@@ -435,6 +450,13 @@ function render(): void {
   if (!report) return;
   const view = currentView();
   eurViewBtn.setAttribute('aria-pressed', String(eurOn));
+  const vatShown = report.vat !== 'excluded';
+  vatBtn.setAttribute('aria-pressed', String(vatShown));
+  vatBtn.disabled = onlyWithVat(loaded ?? report);
+  vatBtn.title = vatBtn.disabled
+    ? 'This report was saved by an older version, with VAT included: load it again to see it without VAT'
+    : 'Include the VAT paid on invoices in the amounts';
+  subEl.textContent = `${subEl.textContent?.replace(/ (VAT included|Excluding VAT)\.$/, '')} ${vatShown ? 'VAT included.' : 'Excluding VAT.'}`;
   // The currency filter applies whenever amounts are in invoice currencies.
   currencySelect.disabled = eurOn;
   table.hidden = view !== 'currency';
@@ -505,6 +527,9 @@ function renderMeta(r: RevenueReport): void {
     `Country from customer address: ${s.customerAddress}, invoice snapshot: ${s.invoiceSnapshot}, ` +
     `shipping: ${s.shipping}, unknown: ${s.unknown}. ` +
     `Conversion to ${r.baseCurrency.toUpperCase()}: ${r.fxSource}. ` +
+    (r.vat === 'excluded'
+      ? `Amounts exclude VAT: each invoice's paid amount times its net share of the invoice total. `
+      : `Amounts include the VAT paid. `) +
     `Services and products: each invoice is split across its line items by net amount; services by the product's tax code (else the account default). ` +
     `Clients: whole invoices per customer. Contractors: the products assigned to them in Options.` +
     (r.servicesNote ? ` ${r.servicesNote}` : '');
@@ -587,7 +612,7 @@ form.addEventListener('submit', async (e) => {
   e.preventDefault();
   loadBtn.disabled = true;
   exportBtn.disabled = true;
-  eurViewBtn.disabled = true;
+  eurViewBtn.disabled = vatBtn.disabled = true;
   setStatus('Fetching…');
   loading = true;
   const res = await api.revenueByCountry({ from: fromInput.value || undefined, to: toInput.value || undefined });
@@ -596,10 +621,10 @@ form.addEventListener('submit', async (e) => {
   if (!res.ok) {
     setStatus(res.error, true);
     // Keep the previous report usable.
-    exportBtn.disabled = eurViewBtn.disabled = !report;
+    exportBtn.disabled = eurViewBtn.disabled = vatBtn.disabled = !report;
     return;
   }
-  report = res.value;
+  report = showLoaded(res.value);
   populateCurrencies(report);
   render();
   renderMeta(report);
@@ -610,6 +635,14 @@ form.addEventListener('submit', async (e) => {
 
 currencySelect.addEventListener('change', render);
 
+vatBtn.addEventListener('click', () => {
+  if (!loaded) return;
+  vatOn = !vatOn;
+  const shown = showLoaded(loaded);
+  populateCurrencies(shown);
+  render();
+  renderMeta(shown);
+});
 eurViewBtn.addEventListener('click', () => {
   eurOn = !eurOn;
   render();
@@ -661,7 +694,8 @@ function restoreRevenue(saved: SavedRevenue): void {
   breakdown = f.breakdown === 'country' || f.breakdown === 'client' ? f.breakdown : 'product';
   breakdownSelect.value = breakdown;
   eurOn = !!f.eur;
-  report = saved.report;
+  vatOn = !!f.vat;
+  report = showLoaded(saved.report);
   populateCurrencies(report);
   currencySelect.value = report.totalsByCurrency.some((t) => t.currency === f.currency) ? f.currency : '';
   render();
@@ -672,12 +706,12 @@ function restoreRevenue(saved: SavedRevenue): void {
 
 /** Contractors worked out again for the current assignments, on the report already loaded. */
 async function regroupContractors(): Promise<void> {
-  const before = report;
+  const before = loaded;
   if (!before) return;
   const res = await api.regroupContractors(before);
   // A newer load replaced the report meanwhile: keep that one.
-  if (!res.ok || report !== before) return;
-  report = res.value;
+  if (!res.ok || loaded !== before) return;
+  showLoaded(res.value);
   render();
 }
 window.addEventListener('settings-saved', () => void regroupContractors());

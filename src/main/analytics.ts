@@ -6,7 +6,10 @@ export interface InvoiceFact {
   /** Name shown for the customer in the client view (name, else email). */
   customerName?: string | null;
   currency: string;
+  /** What was paid, VAT included, in minor units. */
   amountPaid: number;
+  /** What was paid without VAT, in minor units (see paidExcludingTax). */
+  amountPaidExclTax?: number;
   /** UTC date (YYYY-MM-DD) the invoice was paid, used for currency conversion. */
   paidDate: string;
   /** Country from the customer object's billing address (current). */
@@ -271,8 +274,13 @@ const clientNamesOf = (clients: readonly GroupTotal[]) => new Map(clients.map((c
 /** The report with its contractors worked out again for the current assignments (no call to Stripe). */
 export function regroupContractors(report: RevenueReport, contractors: ContractorMap): RevenueReport {
   // Reports saved before product parts were kept can't be regrouped.
-  if (!Array.isArray(report.productParts)) return report;
-  return { ...report, contractors: contractorTotals(report.productParts, contractors, report.baseTotal, clientNamesOf(report.clients)) };
+  const withVat = report.withVat && regroupContractors(report.withVat, contractors);
+  if (!Array.isArray(report.productParts)) return withVat ? { ...report, withVat } : report;
+  return {
+    ...report,
+    contractors: contractorTotals(report.productParts, contractors, report.baseTotal, clientNamesOf(report.clients)),
+    ...(withVat ? { withVat } : {}),
+  };
 }
 
 export function clientName(key: string, seen: string[]): string {

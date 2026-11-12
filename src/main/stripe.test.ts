@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { listProducts, revenueByCountry, vatFetchScope, vatReport, type InvoiceLike, type InvoiceListParams, type LineItemLike, type ProductLike, type ServiceSource } from './stripe';
+import { listProducts, paidExcludingTax, revenueByCountry, vatFetchScope, vatReport, type InvoiceLike, type InvoiceListParams, type LineItemLike, type ProductLike, type ServiceSource } from './stripe';
 import type { FxRateStore } from './fx';
 import type { Progress } from '../shared/types';
 
@@ -187,3 +187,39 @@ const emptyServices: ServiceSource = {
   defaultTaxCode: async () => null,
   taxCodeName: async (id) => id,
 };
+
+test('paid amount without VAT: scaled by the net share of the total, in whole minor units', () => {
+  const tax = (amount: number) => [{ amount, taxability_reason: 'standard_rated' }];
+  assert.equal(paidExcludingTax({ amount_paid: 11900, total: 11900, total_taxes: tax(1900) }), 10000);
+  // Partly credited: the paid part keeps the invoice's proportions.
+  assert.equal(paidExcludingTax({ amount_paid: 5950, total: 11900, total_taxes: tax(1900) }), 5000);
+  assert.equal(paidExcludingTax({ amount_paid: 1001, total: 1190, total_taxes: tax(190) }), 841);
+  // No VAT, or no total: what was paid.
+  assert.equal(paidExcludingTax({ amount_paid: 500, total: 500, total_taxes: [] }), 500);
+  assert.equal(paidExcludingTax({ amount_paid: 500, total: 500, total_taxes: null }), 500);
+  assert.equal(paidExcludingTax({ amount_paid: 0, total: 0, total_taxes: tax(0) }), 0);
+});
+
+test('revenue comes without VAT, with the VAT-included report alongside; lines keep their own net', async () => {
+  const line = (product: string, amount: number): LineItemLike => ({ amount, description: product, discount_amounts: [], pricing: { price_details: { product } } });
+  const { list } = source([
+    {
+      ...inv('in_cy', 'paid', '2025-04-10'),
+      // 100.00 at 19% and 50.00 exempt: 169.00 paid.
+      amount_paid: 16900,
+      total: 16900,
+      total_taxes: [{ amount: 1900, taxability_reason: 'standard_rated' }],
+      status_transitions: { paid_at: day('2025-04-10'), finalized_at: null },
+      lines: { data: [line('prod_std', 10000), line('prod_exempt', 5000)], has_more: false },
+    },
+  ]);
+  const services: ServiceSource = { ...emptyServices, products: async function* () { yield { id: 'prod_std', name: 'Standard' }; yield { id: 'prod_exempt', name: 'Exempt' }; } };
+  const r = await revenueByCountry(list, fx, { from: '2025-04-01', to: '2025-04-30' }, () => {}, services);
+  assert.equal(r.vat, 'excluded');
+  assert.equal(r.withVat?.vat, 'included');
+  assert.deepEqual(r.totalsByCurrency.map((t) => t.amountMinor), [15000]);
+  assert.deepEqual(r.withVat!.totalsByCurrency.map((t) => t.amountMinor), [16900]);
+  // Without VAT each product gets exactly its line's net amount.
+  assert.deepEqual(r.products.map((p) => [p.name, p.byCurrency[0].amountMinor]), [['Standard', 10000], ['Exempt', 5000]]);
+  assert.equal(r.withVat!.products.reduce((n, p) => n + p.byCurrency[0].amountMinor, 0), 16900);
+});

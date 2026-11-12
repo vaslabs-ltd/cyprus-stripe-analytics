@@ -264,6 +264,17 @@ const SCENES = {
     await r.click('#eur-view');
     await r.snap(600);
     await r.spot('#eur-table', 2800, 2);
+    await r.spot('#revenue-sub', 0, 4);
+    await r.caption('Revenue is shown without VAT', 'Incl. VAT adds the VAT paid back in, in every view', 2400);
+    await r.spot(null);
+    await r.caption('');
+    await r.spot('#totals .mix', 1400, 4);
+    await r.click('#vat-toggle');
+    await r.spot('#totals .mix', 0, 4);
+    await r.caption('VAT included: the total goes up by the VAT paid', undefined, 2200);
+    await r.caption('');
+    await r.click('#vat-toggle');
+    await r.spot(null);
     await r.spot('#meta', 0, 4);
     await r.caption('Where each country came from', 'Billing address, the invoice’s address snapshot, or shipping address', 2800);
     await r.spot(null);
