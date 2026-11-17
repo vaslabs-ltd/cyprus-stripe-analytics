@@ -20,6 +20,11 @@ const api: StripeAnalyticsApi = {
   resetPin: () => ipcRenderer.invoke('reset-pin'),
   lockNow: () => ipcRenderer.invoke('lock-now'),
   regroupContractors: (report) => ipcRenderer.invoke('regroup-contractors', report),
+  getCompany: () => ipcRenderer.invoke('get-company'),
+  saveCompany: (company) => ipcRenderer.invoke('save-company', company),
+  companyFromStripe: () => ipcRenderer.invoke('company-from-stripe'),
+  exportSummary: (request) => ipcRenderer.invoke('export-summary', request),
+  openExported: (file) => ipcRenderer.invoke('open-exported', file),
   onProgress: (cb) => {
     const listener = (_e: IpcRendererEvent, p: Progress) => cb(p);
     ipcRenderer.on('progress', listener);

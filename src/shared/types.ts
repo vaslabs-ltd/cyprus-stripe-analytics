@@ -343,6 +343,8 @@ export interface SessionStatus {
   encryptsKey: boolean;
   /** A saved session is waiting to be unlocked or restored. */
   hasSession: boolean;
+  /** Company details (executive summary) are saved, encrypted with the PIN. */
+  hasCompany: boolean;
   /** The PIN has been entered (or set) since the app started. */
   unlocked: boolean;
   /** Null when the Stripe key can be encrypted, else why not (e.g. it comes from an environment variable). */
@@ -369,6 +371,35 @@ export interface SavedSession {
   tab?: string;
   revenue?: SavedRevenue;
   vat?: SavedVat;
+}
+
+/** The company the executive summary is about (Executive summary tab, saved in company.json). */
+export interface CompanyDetails {
+  name: string;
+  /** Postal address, one line per row. */
+  address: string;
+  country: string;
+  email: string;
+  website: string;
+  /** Registration and/or VAT number, as it should be printed. */
+  registration: string;
+}
+
+/** What the executive summary can report. Contractors are never offered: their revenue is personal. */
+export type SummarySection = 'totals' | 'client' | 'product' | 'service' | 'country';
+
+export interface SummaryRequest {
+  /** The report as shown in the Revenue tab (with or without VAT). */
+  report: RevenueReport;
+  sections: SummarySection[];
+  company: CompanyDetails;
+  title: string;
+}
+
+/** The two files written by an export. */
+export interface SummaryFiles {
+  presentation: string;
+  summary: string;
 }
 
 export interface StripeAnalyticsApi {
@@ -406,4 +437,18 @@ export interface StripeAnalyticsApi {
   lockNow(): Promise<void>;
   /** Validates and saves; returns what was saved. */
   saveSettings(settings: Settings): Promise<IpcResult<Settings>>;
+  /**
+   * Company details for the executive summary, kept in the session vault. `saved`: there are some
+   * (then they're never read from Stripe again unless reset); `kept`: a PIN is set, so they're
+   * saved encrypted (otherwise in memory for this run only); `locked`: encrypted and the PIN hasn't
+   * been entered, so they can't be read or changed yet.
+   */
+  getCompany(): Promise<IpcResult<{ company: CompanyDetails; saved: boolean; kept: boolean; locked: boolean }>>;
+  saveCompany(company: CompanyDetails): Promise<IpcResult<CompanyDetails>>;
+  /** Company details read from the Stripe account (one read-only call), for filling or resetting the form. */
+  companyFromStripe(): Promise<IpcResult<CompanyDetails>>;
+  /** Asks for a folder and writes the presentation and the summary; null when cancelled. */
+  exportSummary(request: SummaryRequest): Promise<IpcResult<SummaryFiles | null>>;
+  /** Opens a file written by the last export in the default browser. */
+  openExported(file: string): Promise<IpcResult<null>>;
 }

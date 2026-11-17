@@ -184,3 +184,16 @@ button.link { height: auto; padding: 0; border: none; background: none; color: v
   border: 1px solid #f5a623;
   font-size: 13px;
 }
+
+/* Executive summary tab */
+textarea {
+  font: inherit;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--card);
+  color: var(--fg);
+  resize: vertical;
+}
+#summary-form fieldset label:not(.check) { max-width: 480px; }
+#summary-form .pin-state.error { color: var(--error); }

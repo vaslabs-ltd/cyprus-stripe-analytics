@@ -294,3 +294,11 @@ export function demoServiceSource(): ServiceSource {
     },
   };
 }
+
+/** The demo account's company: fictional, like everything else in demo mode. */
+export const DEMO_ACCOUNT = {
+  email: 'hello@demo-analytics.example',
+  country: 'CY',
+  business_profile: { name: 'Demo Analytics Ltd (demo)', url: 'https://demo-analytics.example', support_email: 'hello@demo-analytics.example' },
+  company: { name: 'Demo Analytics Ltd (demo)', address: { line1: '1 Example Street', postal_code: '1000', city: 'Nicosia', country: 'CY' }, registration_number: 'HE DEMO 000000' },
+};

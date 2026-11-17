@@ -16,7 +16,9 @@
   },
   "author": "Vaslabs <engineering@vaslabs.io>",
   "dependencies": {
+    "chart.js": "4.6.1",
     "dotenv": "^18.0.10",
+    "reveal.js": "6.0.2",
     "stripe": "^23.1.0"
   },
   "devDependencies": {

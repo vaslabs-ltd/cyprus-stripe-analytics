@@ -3,6 +3,7 @@ import { $, countryCell, countryName, el, formatMoney, pctFmt, plural, setStatus
 import { initKeyDialog } from './key.js';
 import { initVatTab } from './vat.js';
 import { initOptionsTab } from './options.js';
+import { initSummaryTab } from './summary.js';
 import { initSessionSaving, remember, restoreSession, setRestoreHandler, unlockAtStartup } from './session.js';
 
 declare global {
@@ -22,6 +23,7 @@ function selectTab(tab: HTMLButtonElement): void {
     t.tabIndex = selected ? 0 : -1;
     document.getElementById(t.getAttribute('aria-controls')!)!.hidden = !selected;
   }
+  if (tab.id === 'tab-summary') summaryTab.shown();
   // Only the report tabs are worth coming back to.
   if (tab.id !== 'tab-options') remember({ tab: tab.id });
 }
@@ -88,6 +90,9 @@ function showLoaded(r: RevenueReport): RevenueReport {
   loaded = r;
   return (report = onlyWithVat(r) ? r : vatOn ? (r.withVat ?? r) : r);
 }
+// The executive summary reports what the Revenue tab shows (VAT included or not).
+const summaryTab = initSummaryTab(api, () => report);
+
 let sortKey: SortKey = 'amount';
 let sortAsc = false;
 // Two independent choices: EUR (convert and sum, or keep invoice currencies) and what to group by
@@ -444,6 +449,7 @@ function rememberRevenue(): void {
 }
 
 function render(): void {
+  summaryTab.refresh();
   const kind = grouping === 'country' ? null : GROUPS[grouping];
   titleEl.textContent = `Revenue by ${grouping}`;
   breakdownLabel.hidden = grouping !== 'contractor';

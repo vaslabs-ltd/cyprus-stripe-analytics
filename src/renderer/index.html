@@ -14,6 +14,7 @@
     <nav class="tabs" role="tablist" aria-label="Reports">
       <button type="button" role="tab" id="tab-country" aria-controls="panel-country" aria-selected="true">Revenue</button>
       <button type="button" role="tab" id="tab-vat" aria-controls="panel-vat" aria-selected="false" tabindex="-1">Cyprus VAT</button>
+      <button type="button" role="tab" id="tab-summary" aria-controls="panel-summary" aria-selected="false" tabindex="-1">Executive summary</button>
       <button type="button" role="tab" id="tab-options" aria-controls="panel-options" aria-selected="false" tabindex="-1">Options</button>
       <button type="button" id="key-open" class="tabs-end">Stripe key…</button>
     </nav>
@@ -207,6 +208,59 @@
       </div>
 
       <footer id="vat-meta"></footer>
+    </section>
+
+    <section id="panel-summary" role="tabpanel" aria-labelledby="tab-summary" hidden>
+      <header>
+        <h1>Executive summary</h1>
+        <p class="sub">
+          An HTML presentation (reveal.js) and a written summary, with pie charts, made from the report loaded in the
+          Revenue tab. Contractor revenue is never included.
+        </p>
+      </header>
+
+      <form id="summary-form" class="options">
+        <p id="summary-source" class="pin-state"></p>
+
+        <fieldset>
+          <legend>Report</legend>
+          <label>Title
+            <input type="text" id="summary-title" value="Executive summary" maxlength="200" autocomplete="off" />
+          </label>
+        </fieldset>
+
+        <fieldset id="summary-sections">
+          <legend>Sections</legend>
+          <p class="hint">Introduction, company details and conclusion are always included.</p>
+          <label class="check"><input type="checkbox" value="totals" checked /> Total revenue</label>
+          <label class="check"><input type="checkbox" value="client" checked /> Revenue by client (dependency on clients)</label>
+          <label class="check"><input type="checkbox" value="product" checked /> Revenue by product</label>
+          <label class="check"><input type="checkbox" value="service" checked /> Revenue by service (tax code)</label>
+          <label class="check"><input type="checkbox" value="country" checked /> Revenue by country</label>
+        </fieldset>
+
+        <fieldset id="summary-company">
+          <legend>Company details</legend>
+          <p class="hint" id="company-hint"></p>
+          <label>Company name <input type="text" name="name" maxlength="200" autocomplete="off" /></label>
+          <label>Address <textarea name="address" rows="3" maxlength="500"></textarea></label>
+          <label>Country <input type="text" name="country" maxlength="100" autocomplete="off" /></label>
+          <label>Registration / VAT number <input type="text" name="registration" maxlength="200" autocomplete="off" /></label>
+          <label>Email <input type="text" name="email" maxlength="200" autocomplete="off" /></label>
+          <label>Website <input type="text" name="website" maxlength="200" autocomplete="off" /></label>
+          <div class="options-actions">
+            <button type="button" id="company-stripe">Reset from Stripe…</button>
+            <span id="company-status" class="status" role="status"></span>
+          </div>
+        </fieldset>
+
+        <div class="options-actions">
+          <button type="submit" id="summary-export" class="primary">Create presentation and summary…</button>
+          <button type="button" id="summary-open-presentation" hidden>Open presentation</button>
+          <button type="button" id="summary-open-summary" hidden>Open summary</button>
+        </div>
+        <p id="summary-status" class="status" role="status"></p>
+      </form>
     </section>
 
     <section id="panel-options" role="tabpanel" aria-labelledby="tab-options" hidden>

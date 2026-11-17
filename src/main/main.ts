@@ -1,15 +1,17 @@
-import { app, BrowserWindow, dialog, ipcMain } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron';
 import { chmod, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { copyFileSync, existsSync, mkdirSync } from 'node:fs';
 import path from 'node:path';
 import dotenv from 'dotenv';
 import type Stripe from 'stripe';
-import type { IpcResult, KeyStatus, ReportView, RevenueQuery, RevenueReport, SessionStatus, Settings, VatQuery, VatReport } from '../shared/types';
+import type { CompanyDetails, IpcResult, KeyStatus, ReportView, RevenueQuery, RevenueReport, SessionStatus, Settings, VatQuery, VatReport } from '../shared/types';
 import {
   checkKeyAccess,
   createStripeClient,
   isRestrictedKey,
+  companyFromAccount,
   listProducts,
+  readAccount,
   revenueByCountry,
   stripeInvoiceSource,
   stripeServiceSource,
@@ -17,7 +19,7 @@ import {
   type InvoiceSource,
   type ServiceSource,
 } from './stripe';
-import { demoInvoiceSource, demoServiceSource, isDemoKey } from './demo';
+import { DEMO_ACCOUNT, demoInvoiceSource, demoServiceSource, isDemoKey } from './demo';
 import { vatReportToCsv } from './vat';
 import { parseView, regroupContractors, reportToCsv, type ContractorMap } from './analytics';
 import { FxRateStore } from './fx';
@@ -25,6 +27,7 @@ import { APP_DIR, cacheDir } from './paths';
 import { loadSettings, normalizeSettings, saveSettings } from './settings';
 import { fileStore, memoryStore, SessionVault } from './session';
 import { isValidPin, WrongPinError } from './vault';
+import { countryName, loadSummaryAssets, normalizeCompany, normalizeSections, presentationHtml, summaryFileNames, summaryHtml } from './summary';
 
 /**
  * The app's config dir: ~/.config/vaslabs-ltd/stripe-analytics on Linux,
@@ -389,6 +392,81 @@ ipcMain.handle('export-vat-csv', (event, report: VatReport) =>
   wrap(() =>
     saveCsv(event.sender, 'Export Cyprus VAT report', `${demo ? 'demo-' : ''}cyprus-vat-${report.query.from}-to-${report.query.to}.csv`, () => vatReportToCsv(report)),
   ),
+);
+
+// ---- Executive summary ----
+
+/**
+ * Company details live in the session vault: encrypted with the PIN like the last session (in
+ * memory for this run only without a PIN, and always in demo mode, whose vault is in memory).
+ */
+ipcMain.handle('get-company', () =>
+  wrap(async () => {
+    const { company, kept, locked } = await vault().company();
+    return { company: normalizeCompany(company), saved: company !== null, kept, locked };
+  }),
+);
+
+ipcMain.handle('save-company', (_event, raw: unknown) =>
+  wrap(async () => {
+    const company = normalizeCompany(raw);
+    await vault().saveCompany(company);
+    return company;
+  }),
+);
+
+ipcMain.handle('company-from-stripe', () =>
+  wrap(async () => {
+    if (demo) return companyFromAccount(DEMO_ACCOUNT, countryName);
+    stripe ??= createStripeClient(process.env.STRIPE_PASSKEY);
+    return companyFromAccount(await readAccount(stripe), countryName);
+  }),
+);
+
+/** Files written by exports this run: the only ones the renderer may ask to open. */
+const exported = new Set<string>();
+
+ipcMain.handle('export-summary', (event, raw: { report?: RevenueReport; sections?: unknown; company?: unknown; title?: unknown }) =>
+  wrap(async () => {
+    const report = raw?.report;
+    if (!report || !Array.isArray(report.totalsByCurrency)) throw new Error('Load a revenue report first.');
+    const sections = normalizeSections(raw.sections);
+    if (!sections.length) throw new Error('Choose at least one section to report.');
+    // Contractors are never part of an executive summary: drop them before anything reads the report.
+    const request = {
+      report: { ...report, contractors: [], productParts: undefined, withVat: undefined },
+      sections,
+      company: normalizeCompany(raw.company),
+      title: typeof raw.title === 'string' ? raw.title.slice(0, 200) : '',
+    };
+    const win = BrowserWindow.fromWebContents(event.sender);
+    const opts = { title: 'Choose a folder for the presentation and summary', properties: ['openDirectory', 'createDirectory'] as Array<'openDirectory' | 'createDirectory'> };
+    const res = win ? await dialog.showOpenDialog(win, opts) : await dialog.showOpenDialog(opts);
+    if (res.canceled || !res.filePaths[0]) return null;
+    const names = summaryFileNames(report, demo);
+    const files = { presentation: path.join(res.filePaths[0], names.presentation), summary: path.join(res.filePaths[0], names.summary) };
+    const existing = Object.values(files).filter((f) => existsSync(f));
+    if (existing.length) {
+      const msg = { type: 'question' as const, buttons: ['Replace', 'Cancel'], defaultId: 1, cancelId: 1, message: 'Replace the existing files?', detail: existing.map((f) => path.basename(f)).join('\n') };
+      const answer = win ? await dialog.showMessageBox(win, msg) : await dialog.showMessageBox(msg);
+      if (answer.response !== 0) return null;
+    }
+    const assets = loadSummaryAssets();
+    await writeFile(files.presentation, presentationHtml(request, assets), 'utf8');
+    await writeFile(files.summary, summaryHtml(request, assets), 'utf8');
+    exported.add(files.presentation);
+    exported.add(files.summary);
+    return files;
+  }),
+);
+
+ipcMain.handle('open-exported', (_event, file: unknown) =>
+  wrap(async () => {
+    if (typeof file !== 'string' || !exported.has(file)) throw new Error('Only exported files can be opened.');
+    const err = await shell.openPath(file);
+    if (err) throw new Error(err);
+    return null;
+  }),
 );
 
 app.whenReady().then(() => {

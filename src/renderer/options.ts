@@ -228,7 +228,7 @@ async function initPin(api: StripeAnalyticsApi): Promise<void> {
     $<HTMLElement>('#pin-current-label').hidden = !s.pinSet;
     $<HTMLElement>('#pin-new-text').textContent = s.pinSet ? 'New PIN (leave empty to keep it)' : 'PIN (4–8 digits)';
     saveBtn.textContent = s.pinSet ? 'Save' : 'Set PIN';
-    unlockBtn.hidden = !s.pinSet || s.unlocked || !s.hasSession;
+    unlockBtn.hidden = !s.pinSet || s.unlocked || (!s.hasSession && !s.hasCompany);
     lockBtn.hidden = !s.pinSet || !s.unlocked;
     removeBtn.hidden = !s.pinSet;
     encrypt.checked = s.encryptsKey;
@@ -244,6 +244,7 @@ async function initPin(api: StripeAnalyticsApi): Promise<void> {
             'PIN set: the last session is saved after every load',
             s.encryptsKey ? 'the Stripe key is encrypted with it' : null,
             s.hasSession ? (s.unlocked ? 'a session is saved' : 'a saved session is locked') : null,
+            s.hasCompany ? (s.unlocked ? 'company details are saved' : 'saved company details are locked') : null,
           ]
             .filter(Boolean)
             .join(' · ') + '.';

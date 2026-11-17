@@ -252,6 +252,32 @@ recorded no exemption or 0% rate for it, an EU invoice has VAT or no
 VAT number, an international invoice has VAT, or the country is unknown.
 Not included: credit notes/refunds and input VAT. Export CSV writes one row per invoice.
 
+### Executive summary
+
+The **Executive summary** tab turns the report loaded in the Revenue tab (same period, with or
+without VAT as shown there) into two self-contained HTML files, written to a folder you choose:
+
+- `executive-summary-<from>-to-<to>-presentation.html`: a [reveal.js](https://revealjs.com) slide
+  deck (arrow keys to move; add `?print-pdf` to the URL and print from Chrome for a PDF),
+- `executive-summary-<from>-to-<to>-summary.html`: the same content as a one-page written summary.
+
+Both have an introduction, company details, the sections you tick (total revenue; revenue by
+client, product, service and country, each as a [Chart.js](https://www.chartjs.org) pie with
+the five largest slices plus "Other", and a table) and a short factual conclusion. Contractors are never
+included: their revenue is personal. The libraries are inlined, so the files open offline and
+load nothing from the network.
+
+Both follow the viewer's light or dark system setting, and have a **Dark theme / Light theme**
+button in the top-right corner (remembered per browser). Printing is always light.
+
+Company details are read from the Stripe account the first time the tab is opened (one read call,
+which may need **Read** access to account details on the key; anything it doesn't return is left
+for you to type). After that your edits are kept and Stripe isn't asked again, until you click
+**Reset from Stripe…**: fields the account has a value for replace your edits, the others keep
+what you typed. They're kept with the [last session](#last-session-pin): encrypted with the PIN,
+and readable only once it's entered. Without a PIN they're kept in memory until the app closes,
+and removing or resetting the PIN deletes them.
+
 ### Options
 
 ![Widening the VAT invoice search and choosing statuses on the Options tab](docs/gifs/options.gif)
@@ -274,7 +300,8 @@ search only. The same tab holds the contractors and product assignments for the
 With a PIN set (Options → **Last session**, 4–8 digits), the app keeps the reports you last
 loaded, with their dates, filters, grouping, EUR view and the tab you were on, and restores
 them when it starts again, after you enter the PIN. Nothing is fetched from Stripe to do that.
-The session is saved after every load and view change. Without a PIN nothing is kept.
+The session is saved after every load and view change. The company details of the
+[executive summary](#executive-summary) are kept the same way. Without a PIN nothing is kept.
 
 - **Encryption.** Setting the PIN creates an X25519 key pair. Each saved session is sealed to the
   public key (ephemeral ECDH, HKDF-SHA256, AES-256-GCM), so saving never needs the PIN. The
@@ -285,15 +312,15 @@ The session is saved after every load and view change. Without a PIN nothing is 
   works for a key the app saved itself. A key read from the `STRIPE_PASSKEY` environment
   variable or another `.env` file would leave a plain copy behind, so the app refuses.
   Unticking it writes the key back to `.env`.
-- **At start**, the app asks for the PIN only when there's something to unlock: a saved session
-  or an encrypted key. **Not now** skips it (the key dialog then offers to unlock later), and
-  **Forgot PIN…** deletes the PIN, the session and an encrypted key, so the app starts fresh.
+- **At start**, the app asks for the PIN only when there's something to unlock: a saved session,
+  saved company details or an encrypted key. **Not now** skips it (the key dialog then offers to unlock later), and
+  **Forgot PIN…** deletes the PIN, the session, the company details and an encrypted key, so the app starts fresh.
 - **Lock now** forgets the PIN until it's entered again, as a restart would.
 - Changing the PIN, the checkbox or removing the PIN needs the current PIN. Entering a new
   Stripe key deletes the saved session (it belonged to the old key). The PIN is kept, re-encrypted
   for the new key, if it was entered since the app started; otherwise it's removed.
 
-The files are `session-lock.json` and `last-session.json` in the config folder (see
+The files are `session-lock.json`, `last-session.json` and `company.json` in the config folder (see
 [Stripe key](#stripe-key-read-only)), readable only by you. A 4–8 digit PIN keeps them from being
 read casually, but scrypt only slows guessing down: someone with a copy of the files and enough
 time could try every PIN, and if the Stripe key is encrypted as well, everything rests on the PIN.

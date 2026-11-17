@@ -42,7 +42,7 @@ export function seedSession(saved: SavedSession): void {
 export async function unlockAtStartup(): Promise<SavedSession | null> {
   const status = await api.sessionStatus();
   if (status.unlocked) return api.restoreSession();
-  if (!status.pinSet || (!status.hasSession && !status.encryptsKey)) return null;
+  if (!status.pinSet || (!status.hasSession && !status.hasCompany && !status.encryptsKey)) return null;
   return askForPin();
 }
 
@@ -57,7 +57,8 @@ export async function askForPin(): Promise<SavedSession | null> {
   const skip = $<HTMLButtonElement>('#unlock-skip');
   const forgot = $<HTMLButtonElement>('#unlock-forgot');
 
-  const what = status.hasSession && status.encryptsKey ? 'the Stripe key and the last session' : status.encryptsKey ? 'the Stripe key' : 'the last session';
+  const parts = [status.encryptsKey && 'the Stripe key', status.hasSession && 'the last session', status.hasCompany && 'the company details'].filter((p): p is string => !!p);
+  const what = parts.length > 1 ? `${parts.slice(0, -1).join(', ')} and ${parts[parts.length - 1]}` : (parts[0] ?? 'the last session');
   $<HTMLElement>('#unlock-reason').textContent = `Enter your PIN to unlock ${what}.`;
   error.textContent = '';
   input.value = '';

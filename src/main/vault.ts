@@ -73,6 +73,8 @@ const unb64 = (s: string) => Buffer.from(s, 'base64');
 const AAD_PRIVATE = Buffer.from('stripe-analytics private key v1');
 const AAD_STRIPE = Buffer.from('stripe-analytics stripe key v1');
 const AAD_SESSION = Buffer.from('stripe-analytics session v1');
+/** Company details (executive summary): sealed like a session, but never interchangeable with one. */
+export const AAD_COMPANY = Buffer.from('stripe-analytics company v1');
 
 function deriveKey(secret: string, kdf: Kdf): Promise<Buffer> {
   return new Promise((resolve, reject) =>
@@ -154,22 +156,22 @@ export async function rewrap(lock: Lock, privateKey: KeyObject, pin: string, str
   return next;
 }
 
-function sessionKey(shared: Buffer, epk: Buffer, recipient: Buffer): Buffer {
-  return Buffer.from(hkdfSync('sha256', shared, Buffer.concat([epk, recipient]), AAD_SESSION, 32));
+function sessionKey(shared: Buffer, epk: Buffer, recipient: Buffer, aad: Buffer): Buffer {
+  return Buffer.from(hkdfSync('sha256', shared, Buffer.concat([epk, recipient]), aad, 32));
 }
 
-/** Seals data to the lock's public key: no PIN needed. */
-export function sealSession(lock: Lock, plaintext: Buffer): SealedSession {
+/** Seals data to the lock's public key: no PIN needed. `aad` says what it is (a session by default). */
+export function sealSession(lock: Lock, plaintext: Buffer, aad: Buffer = AAD_SESSION): SealedSession {
   const recipient = unb64(lock.publicKey);
   const eph = generateKeyPairSync('x25519');
   const epk = eph.publicKey.export({ type: 'spki', format: 'der' });
   const shared = diffieHellman({ privateKey: eph.privateKey, publicKey: createPublicKey({ key: recipient, format: 'der', type: 'spki' }) });
-  return { version: 1, epk: b64(epk), ...seal(sessionKey(shared, epk, recipient), plaintext, AAD_SESSION) };
+  return { version: 1, epk: b64(epk), ...seal(sessionKey(shared, epk, recipient, aad), plaintext, aad) };
 }
 
-export function openSession(privateKey: KeyObject, s: SealedSession): Buffer {
+export function openSession(privateKey: KeyObject, s: SealedSession, aad: Buffer = AAD_SESSION): Buffer {
   const epk = unb64(s.epk);
   const recipient = createPublicKey(privateKey).export({ type: 'spki', format: 'der' });
   const shared = diffieHellman({ privateKey, publicKey: createPublicKey({ key: epk, format: 'der', type: 'spki' }) });
-  return open(sessionKey(shared, epk, recipient), s, AAD_SESSION);
+  return open(sessionKey(shared, epk, recipient, aad), s, aad);
 }

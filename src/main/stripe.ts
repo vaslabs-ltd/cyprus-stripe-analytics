@@ -1,5 +1,5 @@
 import Stripe from 'stripe';
-import type { FetchScope, InvoiceStatus, ProductInfo, Progress, RevenueQuery, RevenueReport, VatFetchSettings, VatQuery, VatReport } from '../shared/types';
+import type { CompanyDetails, FetchScope, InvoiceStatus, ProductInfo, Progress, RevenueQuery, RevenueReport, VatFetchSettings, VatQuery, VatReport } from '../shared/types';
 import { lineItem, NO_CONTRACTORS, NO_TAX_CODE, RevenueAggregator, type ContractorMap, toMajorUnits, UNKNOWN_TAX_CODE, type Classify, type InvoiceFact, type LineFact } from './analytics';
 import { assertSupportedCurrency, BASE_CURRENCY, FX_SOURCE, isoDate, type FxRateStore } from './fx';
 import { buildVatReport, type VatInvoiceFact } from './vat';
@@ -27,6 +27,50 @@ export async function checkKeyAccess(stripe: Stripe): Promise<void> {
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     throw new Error(`Stripe rejected the key: ${msg}`);
+  }
+}
+
+/** The parts of a Stripe account the company details are read from. */
+export interface AccountLike {
+  email?: string | null;
+  country?: string | null;
+  business_profile?: { name?: string | null; url?: string | null; support_email?: string | null; support_address?: AddressLike | null } | null;
+  company?: { name?: string | null; address?: AddressLike | null; registration_number?: string | null } | null;
+  settings?: { dashboard?: { display_name?: string | null } | null } | null;
+}
+
+interface AddressLike {
+  line1?: string | null;
+  line2?: string | null;
+  city?: string | null;
+  state?: string | null;
+  postal_code?: string | null;
+  country?: string | null;
+}
+
+/** Company details as far as the account has them; anything missing stays empty, to be typed in. */
+export function companyFromAccount(a: AccountLike, countryName: (code: string) => string): CompanyDetails {
+  const bp = a.business_profile ?? {};
+  const address = a.company?.address ?? bp.support_address ?? null;
+  const lines = address ? [address.line1, address.line2, [address.postal_code, address.city].filter(Boolean).join(' '), address.state].filter((l): l is string => !!l?.trim()) : [];
+  const country = address?.country || a.country || '';
+  return {
+    name: a.company?.name || bp.name || a.settings?.dashboard?.display_name || '',
+    address: lines.join('\n'),
+    country: country ? countryName(country) : '',
+    email: bp.support_email || a.email || '',
+    website: bp.url || '',
+    registration: a.company?.registration_number || '',
+  };
+}
+
+/** The key's own account (one read call). */
+export async function readAccount(stripe: Stripe): Promise<AccountLike> {
+  try {
+    return await stripe.accounts.retrieveCurrent();
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    throw new Error(`Could not read the account details from Stripe (${msg}). Type them in instead.`);
   }
 }
 

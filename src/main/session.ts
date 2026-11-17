@@ -1,6 +1,7 @@
 /**
- * The last session (reports and how they were being viewed), kept encrypted so the app can be
- * restarted and carry on. Nothing is kept without a PIN. See vault.ts for the encryption.
+ * The last session (reports and how they were being viewed) and the company details of the
+ * executive summary, kept encrypted so the app can be restarted and carry on. Nothing is kept
+ * without a PIN. See vault.ts for the encryption.
  */
 import { existsSync } from 'node:fs';
 import { chmod, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
@@ -8,7 +9,7 @@ import path from 'node:path';
 import { gunzipSync, gzipSync } from 'node:zlib';
 import type { KeyObject } from 'node:crypto';
 import type { SessionStatus } from '../shared/types';
-import { createLock, DEFAULT_COST, openSession, rewrap, sealSession, unlock, WrongPinError, type KdfCost, type Lock, type SealedSession } from './vault';
+import { AAD_COMPANY, createLock, DEFAULT_COST, openSession, rewrap, sealSession, unlock, WrongPinError, type KdfCost, type Lock, type SealedSession } from './vault';
 
 /** Where the lock and the sealed session are kept. */
 export interface Store {
@@ -48,6 +49,7 @@ export function memoryStore(): Store {
 
 export const LOCK_FILE = 'session-lock.json';
 export const SESSION_FILE = 'last-session.json';
+export const COMPANY_FILE = 'company.json';
 /** A session bigger than this isn't saved (a report of a few years is a few MB). */
 const MAX_SESSION_BYTES = 64 * 1024 * 1024;
 
@@ -56,6 +58,11 @@ export class SessionVault {
   private unlocked: { pin: string; privateKey: KeyObject } | null = null;
   /** The last session, decrypted, while unlocked (restored after a window reload without the PIN). */
   private current: unknown = null;
+  /**
+   * The company details: decrypted while unlocked, or (without a PIN) kept in memory for this run
+   * only. Null when there are none (or while locked).
+   */
+  private companyDetails: unknown = null;
 
   constructor(
     private readonly store: Store,
@@ -76,7 +83,8 @@ export class SessionVault {
   async status(): Promise<Omit<SessionStatus, 'available' | 'reason' | 'keyNotEncryptable'>> {
     const lock = await this.lock();
     const hasSession = !!lock && (await this.store.read(SESSION_FILE)) !== null;
-    return { pinSet: !!lock, encryptsKey: !!lock?.stripeKey, hasSession, unlocked: !!this.unlocked };
+    const hasCompany = !!lock && (await this.store.read(COMPANY_FILE)) !== null;
+    return { pinSet: !!lock, encryptsKey: !!lock?.stripeKey, hasSession, hasCompany, unlocked: !!this.unlocked };
   }
 
   get isUnlocked(): boolean {
@@ -90,7 +98,50 @@ export class SessionVault {
     const { stripeKey, privateKey } = await unlock(lock, pin, plainStripeKey);
     this.unlocked = { pin, privateKey };
     this.current = await this.readSession(privateKey);
+    this.companyDetails = await this.readCompany(privateKey);
     return { stripeKey, session: this.current };
+  }
+
+  private async readCompany(privateKey: KeyObject): Promise<unknown> {
+    const raw = await this.store.read(COMPANY_FILE);
+    if (!raw) return null;
+    try {
+      return JSON.parse(openSession(privateKey, JSON.parse(raw) as SealedSession, AAD_COMPANY).toString('utf8'));
+    } catch {
+      await this.store.remove(COMPANY_FILE);
+      return null;
+    }
+  }
+
+  /**
+   * The company details. `kept`: saved encrypted (a PIN is set); `locked`: a PIN is set but hasn't
+   * been entered, so they can't be read (or changed) yet.
+   */
+  async company(): Promise<{ company: unknown; kept: boolean; locked: boolean }> {
+    const lock = await this.lock();
+    if (!lock) return { company: this.companyDetails, kept: false, locked: false };
+    if (!this.unlocked) return { company: null, kept: true, locked: true };
+    return { company: this.companyDetails, kept: true, locked: false };
+  }
+
+  /**
+   * Saves the company details, encrypted, when a PIN is set; without one they're kept in memory
+   * for this run only. Refused while locked, so details that couldn't be read aren't overwritten.
+   * Returns whether they were saved to disk.
+   */
+  async saveCompany(company: unknown): Promise<boolean> {
+    const lock = await this.lock();
+    if (lock && !this.unlocked) throw new Error('Unlock with the PIN first: the company details are encrypted with it.');
+    this.companyDetails = company;
+    if (!lock) return false;
+    await this.writeCompany(lock);
+    return true;
+  }
+
+  private async writeCompany(lock: Lock): Promise<void> {
+    if (this.companyDetails === null) return;
+    const sealed = sealSession(lock, Buffer.from(JSON.stringify(this.companyDetails), 'utf8'), AAD_COMPANY);
+    await this.store.write(COMPANY_FILE, JSON.stringify(sealed));
   }
 
   private async readSession(privateKey: KeyObject): Promise<unknown> {
@@ -132,6 +183,8 @@ export class SessionVault {
       const { lock: created, privateKey } = await createLock(opts.pin, opts.stripeKey, opts.encryptStripeKey, this.cost);
       await this.store.write(LOCK_FILE, JSON.stringify(created));
       this.unlocked = { pin: opts.pin, privateKey };
+      // Details entered before there was a PIN are kept from now on.
+      await this.writeCompany(created);
       return;
     }
     const current = opts.currentPin ?? '';
@@ -140,7 +193,10 @@ export class SessionVault {
     });
     const pin = opts.pin || current;
     await this.store.write(LOCK_FILE, JSON.stringify(await rewrap(lock, privateKey, pin, opts.stripeKey, opts.encryptStripeKey, this.cost)));
-    if (!this.unlocked) this.current = await this.readSession(privateKey);
+    if (!this.unlocked) {
+      this.current = await this.readSession(privateKey);
+      this.companyDetails = await this.readCompany(privateKey);
+    }
     this.unlocked = { pin, privateKey };
   }
 
@@ -155,9 +211,13 @@ export class SessionVault {
     return stripeKey;
   }
 
-  /** Forgets everything: PIN, session and an encrypted Stripe key (e.g. the PIN was forgotten). */
+  /**
+   * Forgets everything on disk: PIN, session, company details and an encrypted Stripe key (e.g. the
+   * PIN was forgotten). Company details already unlocked stay in memory for the rest of the run.
+   */
   async reset(): Promise<void> {
     await this.store.remove(SESSION_FILE);
+    await this.store.remove(COMPANY_FILE);
     await this.store.remove(LOCK_FILE);
     this.unlocked = null;
     this.current = null;
@@ -167,6 +227,7 @@ export class SessionVault {
   lockNow(): void {
     this.unlocked = null;
     this.current = null;
+    this.companyDetails = null;
   }
 
   /**
