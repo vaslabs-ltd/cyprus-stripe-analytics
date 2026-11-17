@@ -53,6 +53,7 @@ const table = $<HTMLTableElement>('#table');
 const tbody = table.querySelector('tbody')!;
 const baseTh = table.querySelector<HTMLTableCellElement>('th[data-sort="base"]')!;
 const metaEl = $<HTMLElement>('#meta');
+const fxNoticeEl = $<HTMLElement>('#fx-notice');
 const eurViewBtn = $<HTMLButtonElement>('#eur-view');
 const vatBtn = $<HTMLButtonElement>('#vat-toggle');
 const eurTable = $<HTMLTableElement>('#eur-table');
@@ -521,6 +522,8 @@ function renderTable(): void {
 }
 
 function renderMeta(r: RevenueReport): void {
+  fxNoticeEl.textContent = r.fxNotice ?? '';
+  fxNoticeEl.hidden = !r.fxNotice;
   const s = r.countrySources;
   metaEl.textContent =
     `${r.invoicesScanned} paid invoices scanned at ${new Date(r.generatedAt).toLocaleString()}. ` +

@@ -175,3 +175,12 @@ form.options .row input[type='text'] { flex: 1; max-width: 320px; }
 .pin-state { margin: 0; font-size: 13px; }
 .dialog-actions .dialog-start { margin-right: auto; }
 button.link { height: auto; padding: 0; border: none; background: none; color: var(--accent); text-decoration: underline; font-size: inherit; }
+
+.notice {
+  margin: 0 0 12px;
+  padding: 8px 12px;
+  border-radius: 6px;
+  background: #f5a62326;
+  border: 1px solid #f5a623;
+  font-size: 13px;
+}

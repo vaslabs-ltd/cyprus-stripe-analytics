@@ -252,9 +252,12 @@ export async function revenueByCountry(
   }
   onProgress({ invoicesScanned: facts.length });
 
+  // An invoice created before the cut-off can be paid today, before today's rate is published:
+  // convert it at the latest rate available (yesterday's, or the last ECB publication before it).
+  const rateDate = (f: InvoiceFact) => (f.paidDate > yesterday ? yesterday : f.paidDate);
   await fx.ensure(
     facts.map((f) => f.currency),
-    facts.map((f) => f.paidDate),
+    facts.map(rateDate),
   );
 
   const { classify, notes } = await taxCodeClassifier(
@@ -265,9 +268,7 @@ export async function revenueByCountry(
   const net = new RevenueAggregator(BASE_CURRENCY, FX_SOURCE, classify, contractors);
   const gross = new RevenueAggregator(BASE_CURRENCY, FX_SOURCE, classify, contractors);
   for (const f of facts) {
-    // An invoice created before the cut-off but paid today can't be converted yet: leave it out.
-    if (f.paidDate > yesterday) continue;
-    const rate = fx.rate(f.currency, f.paidDate);
+    const rate = fx.rate(f.currency, rateDate(f));
     const exclTax = { ...f, amountPaid: f.amountPaidExclTax ?? f.amountPaid };
     net.add(exclTax, toMajorUnits(exclTax.amountPaid, f.currency) / rate);
     gross.add(f, toMajorUnits(f.amountPaid, f.currency) / rate);
@@ -277,6 +278,13 @@ export async function revenueByCountry(
   if (note) notes.push(note);
   const report: RevenueReport = { ...net.report(query, names), vat: 'excluded', withVat: { ...gross.report(query, names), vat: 'included' } };
   if (notes.length) report.servicesNote = report.withVat!.servicesNote = notes.join(' ');
+  const early = facts.filter((f) => f.paidDate > yesterday && f.currency.toLowerCase() !== BASE_CURRENCY);
+  if (early.length) {
+    const days = [...new Set(early.map((f) => f.paidDate))].sort().join(', ');
+    report.fxNotice = report.withVat!.fxNotice =
+      `${early.length} ${early.length === 1 ? 'invoice was' : 'invoices were'} paid on ${days}, before that day's exchange rate was published: ` +
+      `converted to ${BASE_CURRENCY.toUpperCase()} at the latest rate available (${yesterday}). Reload tomorrow for the final figures.`;
+  }
   return report;
 }
 

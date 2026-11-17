@@ -147,6 +147,11 @@ export interface RevenueReport {
   productParts?: ProductPart[];
   /** Set when tax codes couldn't all be read, e.g. the key has no access to Products. */
   servicesNote?: string;
+  /**
+   * Set when some invoices were paid on a day whose exchange rate isn't published yet (today):
+   * they are converted at the latest rate available instead.
+   */
+  fxNotice?: string;
   /** Lower-case currency code all amounts are converted to for comparison. */
   baseCurrency: string;
   /** Sum of all revenue in the base currency, major units. */

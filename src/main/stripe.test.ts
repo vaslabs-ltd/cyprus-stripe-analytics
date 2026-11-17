@@ -223,3 +223,37 @@ test('revenue comes without VAT, with the VAT-included report alongside; lines k
   assert.deepEqual(r.products.map((p) => [p.name, p.byCurrency[0].amountMinor]), [['Standard', 10000], ['Exempt', 5000]]);
   assert.equal(r.withVat!.products.reduce((n, p) => n + p.byCurrency[0].amountMinor, 0), 16900);
 });
+
+test('revenue: an invoice paid today is converted at the latest available rate, with a notice', async () => {
+  const today = new Date().toISOString().slice(0, 10);
+  const yesterday = new Date(Date.now() - 86_400_000).toISOString().slice(0, 10);
+  const lastWeek = new Date(Date.now() - 7 * 86_400_000).toISOString().slice(0, 10);
+  const paid = (id: string, paidOn: string, currency = 'usd'): InvoiceLike => ({
+    ...inv(id, 'paid', lastWeek),
+    currency,
+    amount_paid: 1000,
+    total: 1000,
+    status_transitions: { paid_at: day(paidOn), finalized_at: null },
+  });
+  const run = async (invoices: InvoiceLike[]) => {
+    const asked: string[] = [];
+    const strictFx = {
+      ensure: async (_c: string[], dates: string[]) => {
+        asked.push(...dates);
+        if (dates.some((d) => d >= today)) throw new Error(`only available for past dates (got ${today})`);
+      },
+      rate: (_c: string, date: string) => (date === yesterday ? 2 : 4),
+    } as unknown as FxRateStore;
+    const r = await revenueByCountry(source(invoices).list, strictFx, { from: lastWeek, to: today }, () => {});
+    return { r, asked };
+  };
+
+  const { r, asked } = await run([paid('in_old', lastWeek), paid('in_today', today)]);
+  assert.deepEqual(asked, [lastWeek, yesterday]);
+  assert.equal(r.withVat!.baseTotal, 10 / 4 + 10 / 2);
+  assert.match(r.fxNotice!, new RegExp(`1 invoice was paid on ${today}.*latest rate available \\(${yesterday}\\)`));
+  assert.equal(r.withVat!.fxNotice, r.fxNotice);
+
+  // EUR invoices need no conversion, so no notice for them.
+  assert.equal((await run([paid('in_eur', today, 'eur')])).r.fxNotice, undefined);
+});
